@@ -1,0 +1,33 @@
+# Rust
+target/
+build/
+
+# Node.js
+node_modules/
+node_modules/
+
+# Cloudflare Wrangler (removed)
+# .wrangler/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+target/
+
+# Environment files
+.env
+.env.*
+*.env
+*.env.*
+!.env.example

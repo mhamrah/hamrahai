@@ -1,0 +1,10 @@
+packages:
+  - 'packages/web'
+  - 'packages/shared'
+
+onlyBuiltDependencies:
+  - "@tailwindcss/oxide"
+  - esbuild
+  - nx
+  - sharp
+  - workerd

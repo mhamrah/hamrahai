@@ -1,0 +1,38 @@
+{
+  "name": "hamrahai",
+  "version": "1.0.0",
+  "description": "Hamrah monorepo - AI-powered personal knowledge management",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "scripts": {
+    "web:dev": "pnpm --filter web dev",
+    "web:build": "pnpm --filter web build",
+    "web:test": "pnpm --filter web test:run",
+    "web:test:e2e": "pnpm --filter web test:e2e",
+    "web:lint": "pnpm --filter web lint",
+    "web:fmt": "pnpm --filter web fmt",
+    "web:deploy": "pnpm --filter web deploy",
+    "api:build": "cd packages/api && cargo build",
+    "api:build:release": "cd packages/api && cargo build --release",
+    "api:test": "cd packages/api && cargo test",
+    "api:fmt": "cd packages/api && cargo fmt",
+    "api:clippy": "cd packages/api && cargo clippy -- -D warnings",
+    "api:docker": "cd packages/api && docker build -t hamrah-api .",
+    "ios:open": "open packages/ios/hamrah-ios.xcodeproj",
+    "install": "pnpm install",
+    "fmt": "pnpm web:fmt && pnpm api:fmt",
+    "lint": "pnpm web:lint && pnpm api:clippy",
+    "test": "pnpm web:test && pnpm api:test"
+  },
+  "keywords": [
+    "monorepo",
+    "hamrah",
+    "ai",
+    "knowledge-management"
+  ],
+  "author": "",
+  "license": "MIT"
+}
