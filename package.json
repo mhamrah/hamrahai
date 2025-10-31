@@ -22,7 +22,6 @@
     "api:clippy": "cd packages/api && cargo clippy -- -D warnings",
     "api:docker": "cd packages/api && docker build -t hamrah-api .",
     "ios:open": "open packages/ios/hamrah-ios.xcodeproj",
-    "install": "pnpm install",
     "fmt": "pnpm web:fmt && pnpm api:fmt",
     "lint": "pnpm web:lint && pnpm api:clippy",
     "test": "pnpm web:test && pnpm api:test"
