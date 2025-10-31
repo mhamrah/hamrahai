@@ -299,8 +299,7 @@ pub async fn verify_attestation(
 
         // Store dummy key for simulator
         let dummy_key = vec![0u8; 65];
-        if let Err(e) = store_key(&pool, &request.key_id, &request.bundle_id, &dummy_key, 0).await
-        {
+        if let Err(e) = store_key(&pool, &request.key_id, &request.bundle_id, &dummy_key, 0).await {
             tracing::error!(error = %e, "Failed to store simulator key");
         }
         let _ = delete_challenge(&pool, &request.challenge_id).await;
@@ -384,21 +383,23 @@ pub async fn verify_attestation(
     let app_id = format!("{}.{}", team_id, request.bundle_id);
 
     // Decode challenge
-    let challenge_bytes = match base64::engine::general_purpose::STANDARD.decode(&stored_challenge.challenge) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to decode challenge");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AttestationVerifyResponse {
-                    success: false,
-                    error: Some("Internal server error".to_string()),
-                }),
-            );
-        }
-    };
+    let challenge_bytes =
+        match base64::engine::general_purpose::STANDARD.decode(&stored_challenge.challenge) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to decode challenge");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(AttestationVerifyResponse {
+                        success: false,
+                        error: Some("Internal server error".to_string()),
+                    }),
+                );
+            }
+        };
 
-    let challenge_str = std::str::from_utf8(&challenge_bytes).unwrap_or(&stored_challenge.challenge);
+    let challenge_str =
+        std::str::from_utf8(&challenge_bytes).unwrap_or(&stored_challenge.challenge);
 
     // Parse and verify attestation
     let attestation = match Attestation::from_base64(&request.attestation_object) {
@@ -533,19 +534,20 @@ pub async fn verify_assertion(
     let app_id = format!("{}.{}", team_id, request.bundle_id);
 
     // Decode client data
-    let client_data_bytes = match base64::engine::general_purpose::STANDARD.decode(&request.client_data) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to decode client data");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(AssertionResponse {
-                    success: false,
-                    error: Some("Invalid client data encoding".to_string()),
-                }),
-            );
-        }
-    };
+    let client_data_bytes =
+        match base64::engine::general_purpose::STANDARD.decode(&request.client_data) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to decode client data");
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(AssertionResponse {
+                        success: false,
+                        error: Some("Invalid client data encoding".to_string()),
+                    }),
+                );
+            }
+        };
 
     // Parse assertion
     let assertion = match Assertion::from_base64(&request.assertion) {
