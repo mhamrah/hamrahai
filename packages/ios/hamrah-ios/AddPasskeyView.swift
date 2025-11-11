@@ -168,7 +168,6 @@ struct AddPasskeyView: View {
             "user_id": authManager.currentUser?.id ?? "",
             "email": email,
             "display_name": authManager.currentUser?.name ?? email,
-            "label": "iOS Device",
         ]
 
         return try await SecureAPIService.shared.post(
@@ -225,8 +224,6 @@ struct AddPasskeyView: View {
             [
                 "response": registrationResponseData,
                 "challenge_id": challengeId,
-                // Optional friendly label for server-side storage
-                "label": "iOS Device",
             ] as [String: Any]
 
         _ = try await SecureAPIService.shared.post(

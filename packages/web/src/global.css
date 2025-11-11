@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    /* Brand Color Palette - Base Colors */
+    --color-hunyadi-yellow: 37 89% 67%;
+    --color-linen: 31 57% 93%;
+    --color-tea-rose: 8 71% 86%;
+    --color-cambridge-blue: 165 15% 58%;
+    --color-light-coral: 1 81% 73%;
+
+    /* Semantic Color Mapping */
+    --background: var(--color-linen);
+    --foreground: 165 20% 20%;
+    --muted: var(--color-tea-rose);
+    --muted-foreground: 165 15% 40%;
+    --popover: var(--color-linen);
+    --popover-foreground: 165 20% 20%;
+    --card: 0 0% 100%;
+    --card-foreground: 165 20% 20%;
+    --border: var(--color-cambridge-blue);
+    --input: var(--color-linen);
+    --primary: var(--color-hunyadi-yellow);
+    --primary-foreground: 165 20% 20%;
+    --secondary: var(--color-cambridge-blue);
+    --secondary-foreground: 0 0% 100%;
+    --accent: var(--color-tea-rose);
+    --accent-foreground: 165 20% 20%;
+    --destructive: var(--color-light-coral);
+    --destructive-foreground: 0 0% 100%;
+    --ring: var(--color-cambridge-blue);
+    --border-width: 0px;
+    --border-radius: 0;
+    --shadow-base:
+      -3px -3px 6px #bebebe, 3px 3px 6px #ffffff,
+      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
+      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+    --shadow-sm:
+      3px 3px 6px #bebebe, -3px -3px 6px #ffffff,
+      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
+      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+    --shadow:
+      4px 4px 8px #bebebe, -4px -4px 8px #ffffff,
+      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
+      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+    --shadow-md:
+      5px 5px 10px #bebebe, -5px -5px 10px #ffffff,
+      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
+      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+    --shadow-lg:
+      6px 6px 12px #bebebe, -6px -6px 12px #ffffff,
+      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
+      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+    --shadow-xl:
+      8px 8px 15px #bebebe, -8px -8px 15px #ffffff,
+      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
+      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+    --shadow-2xl:
+      10px 10px 20px #bebebe, -10px -10px 20px #ffffff,
+      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
+      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+    --shadow-inner: inset 4px 4px 8px #bebebe, inset -2px -2px 4px #ffffff;
+    --transform-press: scale(0.95);
+  }
+  .dark {
+    /* Dark mode uses darker versions of brand colors */
+    --background: 165 20% 15%;
+    --foreground: var(--color-linen);
+    --muted: 165 15% 25%;
+    --muted-foreground: var(--color-tea-rose);
+    --popover: 165 20% 18%;
+    --popover-foreground: var(--color-linen);
+    --card: 165 20% 20%;
+    --card-foreground: var(--color-linen);
+    --border: var(--color-cambridge-blue);
+    --input: 165 20% 18%;
+    --primary: var(--color-hunyadi-yellow);
+    --primary-foreground: 165 20% 15%;
+    --secondary: var(--color-cambridge-blue);
+    --secondary-foreground: var(--color-linen);
+    --accent: var(--color-tea-rose);
+    --accent-foreground: 165 20% 15%;
+    --destructive: var(--color-light-coral);
+    --destructive-foreground: var(--color-linen);
+    --ring: var(--color-cambridge-blue);
+    --border-width: 0px;
+    --border-radius: 0;
+    --shadow-base:
+      -3px -3px 6px #2c2c31, 3px 3px 6px #52525b, inset 1px 1px 2px #2c2c31,
+      inset -1px -1px 2px #52525b;
+    --shadow-sm:
+      3px 3px 6px #2c2c31, -3px -3px 6px #52525b, inset 1px 1px 2px #2c2c31,
+      inset -1px -1px 2px #52525b;
+    --shadow:
+      4px 4px 8px #2c2c31, -4px -4px 8px #52525b, inset 1px 1px 2px #2c2c31,
+      inset -1px -1px 2px #52525b;
+    --shadow-md:
+      5px 5px 10px #2c2c31, -5px -5px 10px #52525b, inset 1px 1px 2px #2c2c31,
+      inset -1px -1px 2px #52525b;
+    --shadow-lg:
+      6px 6px 12px #2c2c31, -6px -6px 12px #52525b, inset 1px 1px 2px #2c2c31,
+      inset -1px -1px 2px #52525b;
+    --shadow-xl:
+      8px 8px 15px #2c2c31, -8px -8px 15px #52525b, inset 1px 1px 2px #2c2c31,
+      inset -1px -1px 2px #52525b;
+    --shadow-2xl:
+      10px 10px 20px #2c2c31, -10px -10px 20px #52525b,
+      inset 1px 1px 2px #2c2c31, inset -1px -1px 2px #52525b;
+    --shadow-inner: inset 2px 2px 4px #2c2c31, inset -2px -2px 4px #52525b;
+    --transform-press: scale(0.95);
+  }
+}

@@ -160,6 +160,10 @@ pub struct Example {
 }
 ```
 
+### Session Housekeeping (TODO)
+
+To avoid growth of stale session records, schedule a periodic job to run `purge_expired_sessions` (see `src/db.rs`). Run at least daily in production. The function deletes sessions that are expired (`expires_at < now`) or older than a retention window (default 30 days). Integrate with your scheduler (e.g., Cloud Run jobs/cron) and monitor `rows_affected` for visibility.
+
 ### Best Practices
 
 #### 1. Never Modify Existing Migrations

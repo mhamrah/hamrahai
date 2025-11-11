@@ -172,8 +172,6 @@ type RegisterBeginRequest = {
   user_id: string;
   email: string;
   display_name?: string;
-  label?: string;
-  flow_id?: string;
 };
 
 type RegisterBeginResponse = {

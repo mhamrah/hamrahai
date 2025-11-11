@@ -72,11 +72,6 @@ pub struct RegisterBeginRequest {
     pub email: String,
     #[serde(alias = "display_name")]
     pub display_name: Option<String>,
-    #[allow(dead_code)]
-    pub label: Option<String>,
-    #[serde(alias = "flow_id")]
-    #[allow(dead_code)]
-    pub flow_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,10 +88,6 @@ pub struct RegisterVerifyRequest {
     #[serde(alias = "challenge_id")]
     pub challenge_id: String,
     pub response: RegisterPublicKeyCredential,
-    pub label: Option<String>,
-    #[serde(alias = "flow_id")]
-    #[allow(dead_code)]
-    pub flow_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,11 +99,7 @@ pub struct RegisterVerifyResponse {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AuthenticateBeginRequest {
-    #[serde(alias = "flow_id")]
-    #[allow(dead_code)]
-    pub flow_id: Option<String>,
-}
+pub struct AuthenticateBeginRequest {}
 
 #[derive(Debug, Serialize)]
 pub struct AuthenticateBeginResponse {
@@ -128,9 +115,6 @@ pub struct AuthenticateVerifyRequest {
     #[serde(alias = "challenge_id")]
     pub challenge_id: Option<String>,
     pub response: PublicKeyCredential,
-    #[serde(alias = "flow_id")]
-    #[allow(dead_code)]
-    pub flow_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -511,7 +495,7 @@ pub async fn register_verify(
         user_verified: None,
         credential_device_type: None,
         credential_backed_up: None,
-        name: req.label,
+        name: None,
     };
 
     match create_credential(&pool, &cred_req).await {

@@ -1,0 +1,81 @@
+# ts-prune ignore file
+# This file suppresses false positives from ts-prune that arise due to Qwik City’s
+# dynamic route/module loading and framework‑reserved export names.
+#
+# Format:
+# - Lines beginning with '#' are comments.
+# - Each non-comment line may specify either:
+#     1. A bare export name (applies globally)
+#     2. A path pattern followed by ':' then an export name
+#
+# ts-prune treats many Qwik/Qwik City exports as “unused” because they’re
+# discovered at runtime by the router (file system conventions). We intentionally
+# keep these exports even if static analysis can’t see their usage.
+#
+# Core Qwik/Qwik City implicit exports to ignore globally
+default
+head
+onGet
+onPost
+onPut
+onDelete
+onPatch
+onRequest
+onOptions
+onResolve
+onStaticGenerate
+onServerPrefetch
+onPrefetch
+onClientMount
+onClientPrefetch
+onClientCleanup
+
+# Auth / middleware specific handlers that may be added later
+authenticateRequest
+
+# Config / tooling default exports (always imported dynamically or via CLI tooling)
+vite.config.ts:default
+playwright.config.ts:default
+tailwind.config.ts:default
+vitest.config.ts:default
+
+# Entry modules (Qwik uses these via build manifests)
+src/entry.dev.tsx:default
+src/entry.preview.tsx:default
+src/entry.cloudflare-pages.tsx:fetch
+src/entry.ssr.tsx:default
+
+# Route component defaults and heads (pattern-based — ts-prune may not support globs per line,
+# but listing representative paths reduces noise; add more as needed)
+src/routes/index.tsx:default
+src/routes/index.tsx:head
+src/routes/layout.tsx:default
+src/routes/layout.tsx:onGet
+src/routes/layout.tsx:onRequest
+
+# Auth routes (representative; Qwik City picks them up via filesystem)
+src/routes/auth/login/index.tsx:default
+src/routes/auth/login/index.tsx:head
+src/routes/auth/register/index.tsx:default
+src/routes/auth/register/index.tsx:head
+src/routes/auth/google/index.tsx:onGet
+src/routes/auth/google/callback/index.tsx:onGet
+src/routes/auth/apple/index.tsx:onGet
+src/routes/auth/apple/callback/index.tsx:onPost
+src/routes/auth/complete-profile/index.tsx:default
+src/routes/auth/complete-profile/index.tsx:head
+
+# Protected/settings pages
+src/routes/settings/index.tsx:default
+src/routes/settings/index.tsx:head
+src/routes/protected-page/index.tsx:default
+src/routes/protected-page/index.tsx:head
+
+# Future dynamic handlers (leave for expansion; safe to ignore)
+onAuth
+onLogout
+onErrorBoundary
+
+# Keep this list tight; avoid blanket ignoring everything to preserve
+# usefulness of ts-prune. Add new lines only when a symbol is truly
+# a framework/discovery export.

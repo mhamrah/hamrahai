@@ -1,0 +1,22 @@
+{
+  "name": "@hamrah/shared",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared DTOs and wire protocol types for the Hamrah monorepo (snake_case JSON contracts)",
+  "type": "module",
+  "main": "src/dto.ts",
+  "types": "src/dto.ts",
+  "exports": {
+    ".": {
+      "import": "./src/dto.ts",
+      "types": "./src/dto.ts"
+    }
+  },
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mhamrah/hamrahai",
+    "directory": "packages/shared"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "configurations": [
+    {
+      "name": "Default",
+      "options": {
+        "codeCoverage": {
+          "enabled": true
+        },
+        "testLanguage": null,
+        "testRegion": null
+      }
+    }
+  ],
+  "defaultOptions": {
+    "codeCoverage": {
+      "enabled": true
+    },
+    "testLanguage": null,
+    "testRegion": null
+  },
+  "testTargets": [
+    {
+      "parallelizable": true,
+      "target": {
+        "containerPath": "container:hamrah-ios.xcodeproj",
+        "identifier": "3AEFAE742E9BF33B009BF6CB",
+        "name": "hamrah-ios-tests"
+      }
+    },
+    {
+      "parallelizable": true,
+      "target": {
+        "containerPath": "container:hamrah-ios.xcodeproj",
+        "identifier": "3AEFAE812E9BF357009BF6CB",
+        "name": "hamrah-ios-uitests"
+      }
+    }
+  ],
+  "version": 1
+}

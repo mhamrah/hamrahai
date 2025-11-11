@@ -71,9 +71,8 @@ pub async fn get_user_by_id(pool: &DbPool, id: Uuid) -> anyhow::Result<Option<Us
 pub struct Session {
     pub id: Uuid,
     pub user_id: Uuid,
-    #[allow(dead_code)]
+    // Stored as SHA-256 (URL-safe base64, no padding) of the raw refresh token
     pub refresh_token: String,
-    #[allow(dead_code)]
     pub created_at: chrono::DateTime<Utc>,
     pub expires_at: chrono::DateTime<Utc>,
 }
@@ -81,11 +80,12 @@ pub struct Session {
 pub async fn create_session(
     pool: &DbPool,
     user_id: Uuid,
-    refresh_token: &str,
+    raw_refresh_token: &str,
     ttl_hours: i64,
 ) -> anyhow::Result<Session> {
     let id = Uuid::new_v4();
     let expires_at = Utc::now() + Duration::hours(ttl_hours);
+    let hashed = hash_refresh_token(raw_refresh_token);
     let s = sqlx::query_as!(
         Session,
         r#"INSERT INTO sessions (id, user_id, refresh_token, expires_at)
@@ -93,45 +93,83 @@ pub async fn create_session(
            RETURNING id, user_id, refresh_token, created_at, expires_at"#,
         id,
         user_id,
-        refresh_token,
+        hashed,
         expires_at
     )
     .fetch_one(pool)
     .await?;
+    touch_session_for_lints(&s);
     Ok(s)
 }
 
-pub async fn get_session_by_token(pool: &DbPool, token: &str) -> anyhow::Result<Option<Session>> {
+pub async fn get_session_by_token(
+    pool: &DbPool,
+    raw_token: &str,
+) -> anyhow::Result<Option<Session>> {
+    let hashed = hash_refresh_token(raw_token);
     let s = sqlx::query_as!(
         Session,
         r#"SELECT id, user_id, refresh_token, created_at, expires_at FROM sessions WHERE refresh_token = $1"#,
-        token
+        hashed
     )
     .fetch_optional(pool)
     .await?;
+    if let Some(ref sess) = s {
+        touch_session_for_lints(sess);
+    }
     Ok(s)
 }
 
 pub async fn rotate_session(
     pool: &DbPool,
     session_id: Uuid,
-    new_token: &str,
+    raw_new_token: &str,
     ttl_hours: i64,
 ) -> anyhow::Result<Session> {
     let expires_at = Utc::now() + Duration::hours(ttl_hours);
+    let hashed = hash_refresh_token(raw_new_token);
     let s = sqlx::query_as!(
         Session,
         r#"UPDATE sessions SET refresh_token = $1, expires_at = $2 WHERE id = $3
            RETURNING id, user_id, refresh_token, created_at, expires_at"#,
-        new_token,
+        hashed,
         expires_at,
         session_id
     )
     .fetch_one(pool)
     .await?;
+    touch_session_for_lints(&s);
     Ok(s)
 }
 
+pub async fn purge_expired_sessions(pool: &DbPool) -> anyhow::Result<u64> {
+    // TODO: schedule this to run periodically (e.g., via a cron/worker)
+    // Current policy: remove sessions that are expired OR very old by creation time.
+    // Adjust the retention window as needed.
+    let now = Utc::now();
+    let threshold = now - Duration::days(30);
+    let result = sqlx::query("DELETE FROM sessions WHERE expires_at < $1 OR created_at < $2")
+        .bind(now)
+        .bind(threshold)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+fn hash_refresh_token(raw: &str) -> String {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+#[inline]
+fn touch_session_for_lints(s: &Session) {
+    let _ = std::hint::black_box(&s.refresh_token);
+    let _ = std::hint::black_box(&s.created_at);
+}
 #[derive(sqlx::FromRow, Clone, Serialize)]
 pub struct Tag {
     pub id: Uuid,

@@ -7,6 +7,7 @@
       buildImplicitDependencies = "YES"
       buildArchitectures = "Automatic">
       <BuildActionEntries>
+         <!-- App target -->
          <BuildActionEntry
             buildForTesting = "YES"
             buildForRunning = "YES"
@@ -21,6 +22,36 @@
                ReferencedContainer = "container:hamrah-ios.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <!-- Unit test bundle -->
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "3AEFAE742E9BF33B009BF6CB"
+               BuildableName = "hamrah-ios-tests.xctest"
+               BlueprintName = "hamrah-ios-tests"
+               ReferencedContainer = "container:hamrah-ios.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <!-- UI test bundle -->
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "3AEFAE812E9BF357009BF6CB"
+               BuildableName = "hamrah-ios-uitests.xctest"
+               BlueprintName = "hamrah-ios-uitests"
+               ReferencedContainer = "container:hamrah-ios.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -28,7 +59,44 @@
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
-      shouldAutocreateTestPlan = "YES">
+      shouldAutocreateTestPlan = "NO"
+      codeCoverageEnabled = "YES">
+      <TestPlans>
+         <TestPlanReference
+            reference = "container:hamrah-ios.xcodeproj/xcshareddata/xcschemes/hamrah-ios-tests.xctestplan">
+         </TestPlanReference>
+      </TestPlans>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "3AEFAD8F2E9BEBE1009BF6CB"
+            BuildableName = "hamrah-ios.app"
+            BlueprintName = "hamrah-ios"
+            ReferencedContainer = "container:hamrah-ios.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "3AEFAE742E9BF33B009BF6CB"
+               BuildableName = "hamrah-ios-tests.xctest"
+               BlueprintName = "hamrah-ios-tests"
+               ReferencedContainer = "container:hamrah-ios.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "3AEFAE812E9BF357009BF6CB"
+               BuildableName = "hamrah-ios-uitests.xctest"
+               BlueprintName = "hamrah-ios-uitests"
+               ReferencedContainer = "container:hamrah-ios.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

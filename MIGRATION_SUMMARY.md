@@ -1,7 +1,7 @@
 # Monorepo Migration - Completion Summary
 
-**Date:** October 19, 2025  
-**Repository:** https://github.com/mhamrah/hamrahai  
+**Date:** October 19, 2025
+**Repository:** https://github.com/mhamrah/hamrahai
 **Status:** ✅ Complete
 
 ## What Was Done
@@ -122,6 +122,24 @@ Created path-filtered GitHub Actions workflows:
 - **Endpoint:** https://api.hamrah.app
 - **Secrets:** Already configured in Google Cloud Secret Manager
 - **No changes needed** to deployment configuration
+- CORS (Same-site cookie auth for web): Ensure these headers on session validation and state-changing endpoints (e.g., `/api/auth/sessions/validate`, `/api/auth/sessions/logout`):
+  - `Access-Control-Allow-Origin: https://hamrah.app` (must be the exact origin; not `*`)
+  - `Access-Control-Allow-Credentials: true`
+  - `Access-Control-Allow-Methods: GET, POST, OPTIONS`
+  - `Access-Control-Allow-Headers: content-type, authorization`
+  - `Set-Cookie: session=...; Domain=.hamrah.app; Path=/; Secure; HttpOnly; SameSite=Lax`
+
+  Verification (example):
+  ```bash
+  curl -i -X POST https://api.hamrah.app/api/auth/sessions/logout \
+    -H "Origin: https://hamrah.app" \
+    -H "Content-Type: application/json" \
+    --cookie-jar cookies.txt --cookie cookies.txt
+  ```
+  Expect response headers to include:
+  - `Access-Control-Allow-Origin: https://hamrah.app`
+  - `Access-Control-Allow-Credentials: true`
+  - (and ideally a `Set-Cookie` clearing the session when logging out)
 
 ### Web (Cloudflare Workers) - Ready ✅
 - **Workflow:** `.github/workflows/web-ci.yml`
@@ -138,27 +156,27 @@ Created path-filtered GitHub Actions workflows:
 ## What Stayed the Same
 
 ### API Package
-✅ All Rust code unchanged  
-✅ Cargo.toml dependencies unchanged  
-✅ Dockerfile unchanged  
-✅ Database migrations intact  
-✅ Cloud Run configuration preserved  
-✅ Google Cloud secrets unchanged  
+✅ All Rust code unchanged
+✅ Cargo.toml dependencies unchanged
+✅ Dockerfile unchanged
+✅ Database migrations intact
+✅ Cloud Run configuration preserved
+✅ Google Cloud secrets unchanged
 
 ### Web Package
-✅ All TypeScript/Qwik code unchanged  
-✅ package.json dependencies unchanged  
-✅ wrangler.jsonc configuration unchanged  
-✅ Vite build configuration intact  
-✅ Tests unchanged  
-✅ Cloudflare Workers setup preserved  
+✅ All TypeScript/Qwik code unchanged
+✅ package.json dependencies unchanged
+✅ wrangler.jsonc configuration unchanged
+✅ Vite build configuration intact
+✅ Tests unchanged
+✅ Cloudflare Workers setup preserved
 
 ### iOS Package
-✅ All Swift code unchanged  
-✅ Xcode project configuration intact  
-✅ SwiftData models unchanged  
-✅ Tests unchanged  
-✅ App Store deployment process unchanged  
+✅ All Swift code unchanged
+✅ Xcode project configuration intact
+✅ SwiftData models unchanged
+✅ Tests unchanged
+✅ App Store deployment process unchanged
 
 ## Testing Performed
 
@@ -196,7 +214,7 @@ Created path-filtered GitHub Actions workflows:
    # Test API deployment
    cd packages/api
    docker build -t test .
-   
+
    # Test Web build
    cd packages/web
    pnpm build
@@ -251,9 +269,9 @@ Created path-filtered GitHub Actions workflows:
 
 ## Repository Information
 
-**GitHub URL:** https://github.com/mhamrah/hamrahai  
-**Visibility:** Private  
-**Default Branch:** main  
+**GitHub URL:** https://github.com/mhamrah/hamrahai
+**Visibility:** Private
+**Default Branch:** main
 **Initial Commit:** 45c793c
 
 **Commit Details:**
