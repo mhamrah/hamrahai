@@ -1,10 +1,10 @@
-use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use chrono::{Duration as ChronoDuration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::db::{create_session, get_session_by_token, rotate_session, upsert_user, DbPool, User};
+use crate::db::{DbPool, User, create_session, get_session_by_token, rotate_session, upsert_user};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {

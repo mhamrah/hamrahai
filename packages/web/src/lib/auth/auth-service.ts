@@ -132,9 +132,7 @@ function resolveApiBase(): string {
     if (win.__API_BASE) return win.__API_BASE;
   }
 
-  const viteEnv = (import.meta as unknown as { env?: Record<string, string> })
-    ?.env;
-  if (viteEnv?.VITE_API_BASE) return viteEnv.VITE_API_BASE;
+  if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
 
   if (typeof window !== 'undefined') {
     const isLocal =

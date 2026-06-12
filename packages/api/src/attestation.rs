@@ -1,10 +1,10 @@
 use crate::db::DbPool;
 use appattest_rs::{assertion::Assertion, attestation::Attestation};
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
 use base64::Engine;
 use chrono::{Duration, Utc};
@@ -240,9 +240,9 @@ pub async fn challenge(
     }
 
     // Generate cryptographically secure challenge
-    use rand::RngCore;
+    use rand::RngExt;
     let mut challenge_bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut challenge_bytes);
+    rand::rng().fill(&mut challenge_bytes);
 
     let challenge_base64 = base64::engine::general_purpose::STANDARD.encode(challenge_bytes);
     let challenge_id = Uuid::new_v4();

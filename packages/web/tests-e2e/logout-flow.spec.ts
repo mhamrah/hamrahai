@@ -73,6 +73,10 @@ test.describe('Logout Flow (direct hamrah-api)', () => {
       // Install a test-only logout button that uses authService if available.
       // If authService is not yet loaded when clicked, fall back to direct fetch.
       const installTestButton = () => {
+        if (!document.body) {
+          document.addEventListener('DOMContentLoaded', installTestButton, { once: true });
+          return;
+        }
         if (document.getElementById('logout-test-button')) return;
         const btn = document.createElement('button');
         btn.id = 'logout-test-button';

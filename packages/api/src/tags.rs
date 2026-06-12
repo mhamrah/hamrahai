@@ -1,6 +1,6 @@
 use crate::auth::require_claims;
-use crate::db::{list_tags_for_user, set_link_tags, DbPool};
-use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
+use crate::db::{DbPool, list_tags_for_user, set_link_tags};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 

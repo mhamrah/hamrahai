@@ -1,0 +1,117 @@
+name: iOS - TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/ios/**"
+      - ".github/workflows/ios-testflight.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ios-testflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testflight:
+    name: Build, Test, and Upload
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    env:
+      PROJECT_PATH: packages/ios/hamrah-ios.xcodeproj
+      SCHEME: hamrah-ios
+      EXPORT_OPTIONS: packages/ios/ExportOptions.plist
+      ARCHIVE_PATH: ${{ runner.temp }}/hamrah-ios.xcarchive
+      EXPORT_PATH: ${{ runner.temp }}/testflight-export
+      DERIVED_DATA_PATH: ${{ runner.temp }}/DerivedData
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Validate App Store Connect secrets
+        run: |
+          test -n "${ASC_KEY_ID}"
+          test -n "${ASC_ISSUER_ID}"
+          test -n "${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}"
+
+      - name: Write App Store Connect API key
+        run: |
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          printf '%s' "${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8" >> "$GITHUB_ENV"
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            -disablePackageRepositoryCache
+
+      - name: Select iPhone simulator
+        run: |
+          DESTINATION_ID="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))][0].udid // empty')"
+          if [ -z "${DESTINATION_ID}" ]; then
+            echo "No available iPhone simulator found on runner."
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "IOS_TEST_DESTINATION=id=${DESTINATION_ID}" >> "$GITHUB_ENV"
+
+      - name: Run iOS tests
+        run: |
+          xcodebuild test \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -destination "${IOS_TEST_DESTINATION}" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            -resultBundlePath "$RUNNER_TEMP/hamrah-ios-tests.xcresult" \
+            -skip-testing:hamrah-ios-uitests
+
+      - name: Archive iOS app
+        run: |
+          xcodebuild archive \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "${ARCHIVE_PATH}" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "${ASC_KEY_PATH}" \
+            -authenticationKeyID "${ASC_KEY_ID}" \
+            -authenticationKeyIssuerID "${ASC_ISSUER_ID}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}"
+
+      - name: Upload to TestFlight
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "${ARCHIVE_PATH}" \
+            -exportPath "${EXPORT_PATH}" \
+            -exportOptionsPlist "${EXPORT_OPTIONS}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "${ASC_KEY_PATH}" \
+            -authenticationKeyID "${ASC_KEY_ID}" \
+            -authenticationKeyIssuerID "${ASC_ISSUER_ID}"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hamrah-ios-tests
+          path: ${{ runner.temp }}/hamrah-ios-tests.xcresult
+          if-no-files-found: ignore
+          retention-days: 14

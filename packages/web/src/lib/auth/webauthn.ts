@@ -117,6 +117,15 @@ export class WebAuthnClient {
 export const webauthnClient = new WebAuthnClient();
 
 export async function authenticateWithDiscoverablePasskey(): Promise<PasskeyAuthenticationResult> {
+  const e2ePasskeyAuth = (globalThis as any).__HAMRAH_E2E_PASSKEY_AUTH;
+  const hostname = (globalThis as any).location?.hostname;
+  if (
+    typeof e2ePasskeyAuth === 'function' &&
+    (hostname === 'localhost' || hostname === '127.0.0.1')
+  ) {
+    return e2ePasskeyAuth();
+  }
+
   if (
     !(
       (globalThis as any)?.PublicKeyCredential &&

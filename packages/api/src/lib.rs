@@ -35,9 +35,9 @@ pub mod webauthn;
 // ---------------------------------------------------------------------------
 
 pub use db::{
-    create_session, get_session_by_token, get_summary_for_link, get_user_by_id, init_pool,
-    list_tags_for_user, purge_expired_sessions, rotate_session, run_migrations, set_link_tags,
-    upsert_tag, upsert_user, DbPool, Session, Summary, Tag, User,
+    DbPool, Session, Summary, Tag, User, create_session, get_session_by_token,
+    get_summary_for_link, get_user_by_id, init_pool, list_tags_for_user, purge_expired_sessions,
+    rotate_session, run_migrations, set_link_tags, upsert_tag, upsert_user,
 };
 
 // ---------------------------------------------------------------------------
@@ -46,11 +46,11 @@ pub use db::{
 // ---------------------------------------------------------------------------
 
 pub use webauthn::{
+    AuthenticateBeginRequest, AuthenticateBeginResponse, AuthenticateVerifyRequest,
+    AuthenticateVerifyResponse, RegisterBeginRequest, RegisterBeginResponse, RegisterVerifyRequest,
+    RegisterVerifyResponse, WebAuthnChallenge, WebAuthnConfig, WebAuthnCredential,
     authenticate_begin, authenticate_verify, create_challenge, delete_challenge, get_challenge,
-    register_begin, register_verify, AuthenticateBeginRequest, AuthenticateBeginResponse,
-    AuthenticateVerifyRequest, AuthenticateVerifyResponse, RegisterBeginRequest,
-    RegisterBeginResponse, RegisterVerifyRequest, RegisterVerifyResponse, WebAuthnChallenge,
-    WebAuthnConfig, WebAuthnCredential,
+    register_begin, register_verify,
 };
 
 // ---------------------------------------------------------------------------

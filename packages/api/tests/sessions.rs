@@ -3,8 +3,8 @@ use std::env;
 use uuid::Uuid;
 
 use hamrah_server::db::{
-    create_session, get_session_by_token, init_pool, purge_expired_sessions, rotate_session,
-    run_migrations, DbPool,
+    DbPool, create_session, get_session_by_token, init_pool, purge_expired_sessions,
+    rotate_session, run_migrations,
 };
 
 /// Re-implement the hashing logic from db.rs for verification.

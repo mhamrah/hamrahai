@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const baseURL = process.env.HAMRAH_E2E_BASE_URL ?? "http://localhost:5173";
+
 /**
  * @see https://playwright.dev/docs/test-configuration
  */
@@ -27,7 +29,7 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: "https://localhost:5173",
+    baseURL,
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: "on-first-retry",
@@ -40,6 +42,9 @@ export default defineConfig({
 
     /* Ignore HTTPS errors for local development */
     ignoreHTTPSErrors: true,
+
+    /* Avoid stale Qwik chunk caches between production-build e2e runs. */
+    serviceWorkers: "block",
   },
 
   /* Configure projects for major browsers */
@@ -75,8 +80,8 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: "vite --mode test-ssr",
-    url: "https://localhost:5173",
+    command: "pnpm build && pnpm exec wrangler pages dev ./dist --port 5173 --ip 127.0.0.1",
+    url: baseURL,
     reuseExistingServer: true,
     ignoreHTTPSErrors: true,
     timeout: 120 * 1000, // 2 minutes to start the server

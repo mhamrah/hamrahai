@@ -8,8 +8,8 @@ use crate::users;
 use crate::webauthn;
 use axum::response::IntoResponse;
 use axum::{
-    routing::{delete, get, patch, post},
     Router,
+    routing::{delete, get, patch, post},
 };
 use std::sync::Arc;
 

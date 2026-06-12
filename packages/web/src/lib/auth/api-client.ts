@@ -164,10 +164,9 @@ export class HamrahApiClient {
  */
 function getApiBaseUrl(): string {
   // Explicit overrides for tests or environments
-  const viteEnv = (import.meta as any)?.env;
   const override =
     (typeof window !== 'undefined' && (window as any).__API_BASE) ||
-    (viteEnv?.VITE_API_BASE as string | undefined);
+    import.meta.env.VITE_API_BASE;
 
   if (override) return String(override);
 

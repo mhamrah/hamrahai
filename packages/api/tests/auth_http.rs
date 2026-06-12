@@ -1,12 +1,12 @@
 #![allow(unused)]
 
 use axum::{
+    Router,
     body::{self, Body},
     http::{Request, StatusCode},
-    Router,
 };
 use hamrah_server::{
-    db::{create_session, init_pool, run_migrations, upsert_user, DbPool},
+    db::{DbPool, create_session, init_pool, run_migrations, upsert_user},
     routes::create_router,
 };
 use serde::{Deserialize, Serialize};

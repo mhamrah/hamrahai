@@ -1,6 +1,6 @@
 use crate::auth::require_claims;
-use crate::db::{get_summary_for_link, DbPool};
-use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
+use crate::db::{DbPool, get_summary_for_link};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use uuid::Uuid;
 
 pub async fn latest_summary_for_link(

@@ -1,8 +1,8 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -324,12 +324,12 @@ pub async fn delete_credential(pool: &PgPool, credential_id: &str) -> Result<(),
 // ============================================================================
 
 fn base64_url_encode(data: &[u8]) -> String {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     URL_SAFE_NO_PAD.encode(data)
 }
 
 fn base64_url_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     URL_SAFE_NO_PAD.decode(data)
 }
 
@@ -357,7 +357,7 @@ pub async fn register_begin(
         Err(_) => vec![],
     };
 
-    let res = match config.webauthn.start_passkey_registration(
+    match config.webauthn.start_passkey_registration(
         req.user_id,
         &user_name,
         &user_display_name,
@@ -406,9 +406,7 @@ pub async fn register_begin(
                 error: Some(format!("Failed to generate registration options: {}", e)),
             }),
         ),
-    };
-
-    res
+    }
 }
 
 pub async fn register_verify(
@@ -426,7 +424,7 @@ pub async fn register_verify(
                     credential_id: None,
                     error: Some("Challenge not found".to_string()),
                 }),
-            )
+            );
         }
     };
 
@@ -454,7 +452,7 @@ pub async fn register_verify(
                     credential_id: None,
                     error: Some(format!("Invalid challenge state: {}", e)),
                 }),
-            )
+            );
         }
     };
 
@@ -472,7 +470,7 @@ pub async fn register_verify(
                     credential_id: None,
                     error: Some(format!("Registration verification failed: {}", e)),
                 }),
-            )
+            );
         }
     };
 
@@ -531,7 +529,7 @@ pub async fn authenticate_begin(
     // Empty credentials array allows any passkey to authenticate
     let empty_creds: Vec<Passkey> = vec![];
 
-    let res = match config.webauthn.start_passkey_authentication(&empty_creds) {
+    match config.webauthn.start_passkey_authentication(&empty_creds) {
         Ok((rcr, auth_state)) => {
             // Store the challenge
             let challenge_id = Uuid::new_v4().to_string();
@@ -575,9 +573,7 @@ pub async fn authenticate_begin(
                 error: Some(format!("Failed to generate authentication options: {}", e)),
             }),
         ),
-    };
-
-    res
+    }
 }
 
 pub async fn authenticate_verify(
@@ -599,7 +595,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some("Challenge not found".to_string()),
                 }),
-            )
+            );
         }
     };
 
@@ -631,7 +627,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some(format!("Invalid challenge state: {}", e)),
                 }),
-            )
+            );
         }
     };
 
@@ -651,7 +647,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some("Credential not found".to_string()),
                 }),
-            )
+            );
         }
     };
 
@@ -669,7 +665,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some(format!("Failed to deserialize passkey: {}", e)),
                 }),
-            )
+            );
         }
     };
 
@@ -689,7 +685,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some(format!("Authentication verification failed: {}", e)),
                 }),
-            )
+            );
         }
     };
 
@@ -711,7 +707,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some("User not found".to_string()),
                 }),
-            )
+            );
         }
         Err(e) => {
             return (
@@ -723,7 +719,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some(format!("Failed to fetch user: {}", e)),
                 }),
-            )
+            );
         }
     };
 
@@ -741,7 +737,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some(format!("Failed to create session: {}", e)),
                 }),
-            )
+            );
         }
     };
 
@@ -758,7 +754,7 @@ pub async fn authenticate_verify(
                     session_token: None,
                     error: Some(format!("Failed to issue access token: {}", e)),
                 }),
-            )
+            );
         }
     };
 

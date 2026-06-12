@@ -2,9 +2,13 @@ packages:
   - 'packages/web'
   - 'packages/shared'
 
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
+
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"
   - esbuild
-  - nx
   - sharp
   - workerd

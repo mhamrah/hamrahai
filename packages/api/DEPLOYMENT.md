@@ -8,6 +8,7 @@ The application is deployed to Google Cloud Run:
 - **Region**: us-central1
 - **Service**: hamrah-api
 - **URL**: https://hamrah-api-a7tefmgk7q-uc.a.run.app
+- **Billing mode**: Request-based billing (`--cpu-throttling`) so idle instances are not billed
 
 ## Configuration
 
@@ -142,7 +143,7 @@ gcloud run deploy hamrah-api \
   --memory 512Mi \
   --cpu 1 \
   --port 8080 \
-  --no-cpu-throttling \
+  --cpu-throttling \
   --startup-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=3,failureThreshold=3 \
   --liveness-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=3,failureThreshold=3 \
   --set-env-vars "RUST_LOG=info" \

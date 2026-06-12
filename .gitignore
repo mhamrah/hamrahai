@@ -14,8 +14,10 @@
 
 # Node.js / pnpm
 node_modules/
+.pnpm-store/
 .pnpm-debug.log*
 dist/
+server/
 .output/
 .wrangler/
 .env
@@ -24,6 +26,7 @@ dist/
 # Rust
 target/
 Cargo.lock
+!packages/api/Cargo.lock
 **/*.rs.bk
 
 # Swift / Xcode
@@ -33,6 +36,7 @@ Cargo.lock
 *.xcworkspace/*
 !*.xcworkspace/contents.xcworkspacedata
 DerivedData/
+.derivedData/
 *.hmap
 *.ipa
 *.dSYM.zip

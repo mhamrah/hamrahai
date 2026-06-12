@@ -1,6 +1,6 @@
 use crate::auth::require_claims;
-use crate::db::{get_user_by_id, DbPool};
-use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
+use crate::db::{DbPool, get_user_by_id};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 
 pub async fn me(State(pool): State<DbPool>, headers: HeaderMap) -> impl IntoResponse {
     let claims = match require_claims(&headers) {
