@@ -1,4 +1,4 @@
-name: iOS - TestFlight
+name: iOS - TestFlight Deploy
 
 on:
   push:
@@ -24,9 +24,6 @@ jobs:
       PROJECT_PATH: packages/ios/hamrah-ios.xcodeproj
       SCHEME: hamrah-ios
       EXPORT_OPTIONS: packages/ios/ExportOptions.plist
-      ARCHIVE_PATH: ${{ runner.temp }}/hamrah-ios.xcarchive
-      EXPORT_PATH: ${{ runner.temp }}/testflight-export
-      DERIVED_DATA_PATH: ${{ runner.temp }}/DerivedData
       ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
 
@@ -45,6 +42,12 @@ jobs:
           test -n "${ASC_KEY_ID}"
           test -n "${ASC_ISSUER_ID}"
           test -n "${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}"
+
+      - name: Configure build paths
+        run: |
+          echo "ARCHIVE_PATH=$RUNNER_TEMP/hamrah-ios.xcarchive" >> "$GITHUB_ENV"
+          echo "EXPORT_PATH=$RUNNER_TEMP/testflight-export" >> "$GITHUB_ENV"
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DerivedData" >> "$GITHUB_ENV"
 
       - name: Write App Store Connect API key
         run: |

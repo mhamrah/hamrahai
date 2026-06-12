@@ -63,19 +63,20 @@ gcloud artifacts repositories create hamrah \
 
 ## GitHub Actions Setup
 
-### Required Secrets
+### Required Repository Variables
 
-Configure the following secrets in your GitHub repository settings:
+Configure the following GitHub Actions repository variables:
 
-1. **WIF_PROVIDER**: Workload Identity Federation provider
-   ```
-   projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID
-   ```
-
-2. **GCP_SA_EMAIL**: Service account email
-   ```
-   github-actions@hamrah-ai.iam.gserviceaccount.com
-   ```
+| Variable | Value |
+| --- | --- |
+| `GCP_PROJECT_ID` | `hamrah-ai` |
+| `GCP_PROJECT_NUMBER` | `66020219411` |
+| `GCP_REGION` | `us-central1` |
+| `CLOUD_RUN_SERVICE` | `hamrah-api` |
+| `GAR_LOCATION` | `us-central1` |
+| `GAR_REPOSITORY` | `hamrah` |
+| `GAR_REGISTRY` | `us-central1-docker.pkg.dev` |
+| `WIF_PROVIDER` | `projects/66020219411/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
 
 ### Workload Identity Federation Setup
 
@@ -86,39 +87,36 @@ gcloud iam workload-identity-pools create github-pool \
   --location=global \
   --display-name="GitHub Actions Pool"
 
-# Create provider
+# Create provider. Keep the attribute condition scoped to the GitHub owner.
 gcloud iam workload-identity-pools providers create-oidc github-provider \
   --project=hamrah-ai \
   --location=global \
   --workload-identity-pool=github-pool \
   --display-name="GitHub Provider" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
+  --attribute-condition="assertion.repository_owner == 'mhamrah'" \
   --issuer-uri="https://token.actions.githubusercontent.com"
 
-# Create service account
-gcloud iam service-accounts create github-actions \
-  --project=hamrah-ai \
-  --display-name="GitHub Actions"
+# Grant Direct WIF permissions to this repository principal.
+WORKLOAD_IDENTITY_POOL_ID="projects/66020219411/locations/global/workloadIdentityPools/github-pool"
+GITHUB_REPO="mhamrah/hamrahai"
+PRINCIPAL_SET="principalSet://iam.googleapis.com/${WORKLOAD_IDENTITY_POOL_ID}/attribute.repository/${GITHUB_REPO}"
+RUNTIME_SERVICE_ACCOUNT="66020219411-compute@developer.gserviceaccount.com"
 
-# Grant permissions
 gcloud projects add-iam-policy-binding hamrah-ai \
-  --member="serviceAccount:github-actions@hamrah-ai.iam.gserviceaccount.com" \
+  --member="${PRINCIPAL_SET}" \
   --role="roles/run.admin"
 
-gcloud projects add-iam-policy-binding hamrah-ai \
-  --member="serviceAccount:github-actions@hamrah-ai.iam.gserviceaccount.com" \
+gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SERVICE_ACCOUNT}" \
+  --project=hamrah-ai \
+  --member="${PRINCIPAL_SET}" \
   --role="roles/iam.serviceAccountUser"
 
 gcloud artifacts repositories add-iam-policy-binding hamrah \
-  --location=us-central1 \
-  --member="serviceAccount:github-actions@hamrah-ai.iam.gserviceaccount.com" \
-  --role="roles/artifactregistry.writer"
-
-# Allow GitHub to impersonate service account
-gcloud iam service-accounts add-iam-policy-binding github-actions@hamrah-ai.iam.gserviceaccount.com \
   --project=hamrah-ai \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/YOUR_GITHUB_USERNAME/hamrah-api"
+  --location=us-central1 \
+  --member="${PRINCIPAL_SET}" \
+  --role="roles/artifactregistry.writer"
 ```
 
 ## Manual Deployment
