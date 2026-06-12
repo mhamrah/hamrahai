@@ -66,18 +66,7 @@ jobs:
 
       - name: Select iPhone simulator
         run: |
-          DESTINATION_ID="$(xcodebuild -showdestinations \
-            -project "${PROJECT_PATH}" \
-            -scheme "${SCHEME}" \
-            -json | jq -r '[.destinations[] | select(.platform == "iOS Simulator" and (.name | test("^iPhone")) and (.error | not))][0].id // empty')"
-          if [ -z "${DESTINATION_ID}" ]; then
-            echo "No scheme-compatible iPhone simulator found on runner."
-            xcodebuild -showdestinations \
-              -project "${PROJECT_PATH}" \
-              -scheme "${SCHEME}"
-            exit 1
-          fi
-          echo "IOS_TEST_DESTINATION=id=${DESTINATION_ID}" >> "$GITHUB_ENV"
+          echo "IOS_TEST_DESTINATION=platform=iOS Simulator,name=iPhone 16,OS=latest" >> "$GITHUB_ENV"
 
       - name: Run iOS tests
         run: |
