@@ -8,6 +8,10 @@
 		<string>processing</string>
 		<string>remote-notification</string>
 	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>app.hamrah.ios.sync</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

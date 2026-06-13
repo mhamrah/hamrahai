@@ -15,7 +15,7 @@ concurrency:
 jobs:
   testflight:
     name: Build, Test, and Upload
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
@@ -33,7 +33,7 @@ jobs:
 
       - name: Show Xcode version
         run: |
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
           xcodebuild -version
           xcodebuild -showsdks
 
