@@ -61,7 +61,7 @@ describe('OAuth Provider Token Verification', () => {
         email: 'test@gmail.com',
         name: 'Test User',
         picture: 'https://example.com/avatar.jpg',
-        providerId: 'google-user-id-123',
+        provider_id: 'google-user-id-123',
       });
 
       expect(fetch).toHaveBeenCalledWith('https://www.googleapis.com/oauth2/v3/certs');
@@ -163,7 +163,7 @@ describe('OAuth Provider Token Verification', () => {
         email: 'test@privaterelay.appleid.com',
         name: undefined,
         picture: undefined,
-        providerId: 'apple-user-id-456',
+        provider_id: 'apple-user-id-456',
       });
 
       expect(fetch).toHaveBeenCalledWith('https://appleid.apple.com/auth/keys');

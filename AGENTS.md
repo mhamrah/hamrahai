@@ -42,6 +42,8 @@ hamrahai/
 
 ### Development Workflow
 
+- Always create a pull request when submitting code changes for review. Do not leave code changes only as local edits unless the user explicitly asks not to open a PR.
+
 ```bash
 # Work on specific packages
 pnpm web:dev          # Start web dev server

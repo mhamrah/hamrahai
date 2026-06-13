@@ -3,10 +3,10 @@
 use axum::{
     Router,
     body::{self, Body},
-    http::{Request, StatusCode},
+    http::{Request, StatusCode, header::SET_COOKIE},
 };
 use hamrah_server::{
-    db::{DbPool, create_session, init_pool, run_migrations, upsert_user},
+    db::{DbPool, create_session, get_session_by_token, init_pool, run_migrations, upsert_user},
     routes::create_router,
 };
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,14 @@ struct TokensResponse {
     access_token: String,
     refresh_token: String,
     expires_in: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SessionValidateResponse {
+    success: bool,
+    user: Option<serde_json::Value>,
+    expires_at: Option<String>,
+    error: Option<String>,
 }
 
 async fn setup_router() -> anyhow::Result<Option<(DbPool, Router)>> {
@@ -106,6 +114,111 @@ async fn http_refresh_with_valid_session_issues_new_tokens() -> anyhow::Result<(
         parsed.expires_in > 0,
         "expires_in should be a positive duration (seconds)"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_session_validate_with_valid_cookie_returns_user() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("http-session-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("HTTP Session Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    let _session = create_session(&pool, user.id, &raw_session, 6).await?;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/auth/sessions/validate")
+        .header("cookie", format!("session={raw_session}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let parsed: SessionValidateResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert!(parsed.success);
+    assert_eq!(
+        parsed
+            .user
+            .as_ref()
+            .and_then(|user| user.get("email"))
+            .and_then(|email| email.as_str()),
+        Some(user_email.as_str())
+    );
+    assert!(parsed.expires_at.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_session_validate_without_cookie_returns_unauthorized() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/auth/sessions/validate")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let parsed: SessionValidateResponse = serde_json::from_slice(&body_bytes).unwrap();
+    assert!(!parsed.success);
+    assert_eq!(parsed.error.as_deref(), Some("missing_session"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_session_logout_deletes_session_and_clears_cookies() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("http-logout-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("HTTP Logout Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    let _session = create_session(&pool, user.id, &raw_session, 6).await?;
+    let csrf_token = Uuid::new_v4().to_string();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/sessions/logout")
+        .header("host", "localhost:8080")
+        .header("origin", "http://localhost:5173")
+        .header(
+            "cookie",
+            format!("session={raw_session}; csrf_token={csrf_token}"),
+        )
+        .header("x-csrf-token", csrf_token)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let set_cookies: Vec<_> = resp.headers().get_all(SET_COOKIE).iter().collect();
+    assert!(
+        set_cookies
+            .iter()
+            .any(|cookie| cookie.to_str().unwrap_or_default().starts_with("session=;"))
+    );
+    assert!(set_cookies.iter().any(|cookie| {
+        cookie
+            .to_str()
+            .unwrap_or_default()
+            .starts_with("csrf_token=;")
+    }));
+    assert!(get_session_by_token(&pool, &raw_session).await?.is_none());
 
     Ok(())
 }

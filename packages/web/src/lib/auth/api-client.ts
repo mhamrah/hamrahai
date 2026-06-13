@@ -7,6 +7,22 @@ import type { RequestEventCommon } from '@builder.io/qwik-city';
 import type { ApiUserWire } from '@hamrah/shared';
 export type ApiUser = ApiUserWire;
 
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie
+    .split(';')
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split('=').slice(1).join('=')) : null;
+}
+
+function csrfHeader(method?: string): Record<string, string> {
+  const normalized = (method || 'GET').toUpperCase();
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(normalized)) return {};
+  const token = readCookie('csrf_token');
+  return token ? { 'X-CSRF-Token': token } : {};
+}
+
 export interface ApiAuthResponse {
   success: boolean;
   user?: ApiUser;
@@ -19,11 +35,15 @@ export interface ApiAuthResponse {
 
 
 export interface NativeAuthRequest {
-  provider: string;
-  credential: string;
+  provider?: string;
+  credential?: string;
   email?: string;
   name?: string;
   picture?: string;
+  provider_id?: string;
+  auth_method?: string;
+  platform?: "web" | "ios" | "android" | "api";
+  email_verified_at?: string;
 }
 
 /**
@@ -48,6 +68,7 @@ export class HamrahApiClient {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...csrfHeader(options.method),
       ...(options.headers as Record<string, string> | undefined),
     };
 
@@ -81,7 +102,7 @@ export class HamrahApiClient {
     try {
       const resp = await fetch(`${this.baseUrl}/api/auth/sessions/logout`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...csrfHeader('POST') },
         credentials: 'include',
       });
       const body = (await resp.json().catch(() => ({}))) as {

@@ -33,12 +33,19 @@ export const onPost: RequestHandler = async (event) => {
     const apiClient = createApiClient(event);
     const authResult = await apiClient.post("/api/auth/native", {
       email: idTokenPayload.email,
-      name: idTokenPayload.name,
+      name: idTokenPayload.name || idTokenPayload.email?.split("@")[0],
+      provider: "apple",
+      provider_id: idTokenPayload.sub,
+      auth_method: "apple",
+      platform: "web",
+      email_verified_at: idTokenPayload.email_verified
+        ? new Date().toISOString()
+        : undefined,
     });
 
-    if (authResult.access_token) {
+    if (authResult.refresh_token) {
       const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30); // 30 days
-      setSessionTokenCookie(event, authResult.access_token, expiresAt);
+      setSessionTokenCookie(event, authResult.refresh_token, expiresAt);
     }
 
     // Clear OAuth state cookie

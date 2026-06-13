@@ -27,41 +27,79 @@ pub struct User {
     pub id: Uuid,
     pub email: String,
     pub name: Option<String>,
+    pub picture: Option<String>,
+    pub provider: Option<String>,
+    pub provider_id: Option<String>,
+    pub auth_method: Option<String>,
     pub created_at: chrono::DateTime<Utc>,
+    pub updated_at: Option<chrono::DateTime<Utc>>,
+    pub last_login_at: Option<chrono::DateTime<Utc>>,
+    pub last_login_platform: Option<String>,
+    pub email_verified_at: Option<chrono::DateTime<Utc>>,
 }
 
 pub async fn upsert_user(pool: &DbPool, email: &str, name: Option<&str>) -> anyhow::Result<User> {
-    // Try to get existing
-    if let Some(u) = sqlx::query_as!(
-        User,
-        r#"SELECT id, email, name, created_at FROM users WHERE email = $1"#,
-        email
-    )
-    .fetch_optional(pool)
-    .await?
-    {
-        return Ok(u);
-    }
+    upsert_user_profile(pool, email, name, None, None, None, None, None, None).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_user_profile(
+    pool: &DbPool,
+    email: &str,
+    name: Option<&str>,
+    picture: Option<&str>,
+    provider: Option<&str>,
+    provider_id: Option<&str>,
+    auth_method: Option<&str>,
+    platform: Option<&str>,
+    email_verified_at: Option<chrono::DateTime<Utc>>,
+) -> anyhow::Result<User> {
     let id = Uuid::new_v4();
-    let u = sqlx::query_as!(
-        User,
-        r#"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)
-           RETURNING id, email, name, created_at"#,
-        id,
-        email,
-        name
+    let u = sqlx::query_as::<_, User>(
+        r#"
+        INSERT INTO users (
+            id, email, name, picture, provider, provider_id, auth_method,
+            last_login_at, last_login_platform, email_verified_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9)
+        ON CONFLICT (email) DO UPDATE SET
+            name = COALESCE(EXCLUDED.name, users.name),
+            picture = COALESCE(EXCLUDED.picture, users.picture),
+            provider = COALESCE(EXCLUDED.provider, users.provider),
+            provider_id = COALESCE(EXCLUDED.provider_id, users.provider_id),
+            auth_method = COALESCE(EXCLUDED.auth_method, users.auth_method),
+            last_login_at = NOW(),
+            last_login_platform = COALESCE(EXCLUDED.last_login_platform, users.last_login_platform),
+            email_verified_at = COALESCE(EXCLUDED.email_verified_at, users.email_verified_at),
+            updated_at = NOW()
+        RETURNING id, email, name, picture, provider, provider_id, auth_method, created_at,
+                  updated_at, last_login_at, last_login_platform, email_verified_at
+        "#,
     )
+    .bind(id)
+    .bind(email)
+    .bind(name)
+    .bind(picture)
+    .bind(provider)
+    .bind(provider_id)
+    .bind(auth_method)
+    .bind(platform)
+    .bind(email_verified_at)
     .fetch_one(pool)
     .await?;
     Ok(u)
 }
 
 pub async fn get_user_by_id(pool: &DbPool, id: Uuid) -> anyhow::Result<Option<User>> {
-    let u = sqlx::query_as!(
-        User,
-        r#"SELECT id, email, name, created_at FROM users WHERE id = $1"#,
-        id
+    let u = sqlx::query_as::<_, User>(
+        r#"
+        SELECT id, email, name, picture, provider, provider_id, auth_method, created_at,
+               updated_at, last_login_at, last_login_platform, email_verified_at
+        FROM users
+        WHERE id = $1
+        "#,
     )
+    .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(u)
@@ -118,6 +156,34 @@ pub async fn get_session_by_token(
         touch_session_for_lints(sess);
     }
     Ok(s)
+}
+
+pub async fn get_user_by_session_token(
+    pool: &DbPool,
+    raw_token: &str,
+) -> anyhow::Result<Option<(Session, User)>> {
+    let Some(session) = get_session_by_token(pool, raw_token).await? else {
+        return Ok(None);
+    };
+
+    if session.expires_at < Utc::now() {
+        return Ok(None);
+    }
+
+    let Some(user) = get_user_by_id(pool, session.user_id).await? else {
+        return Ok(None);
+    };
+
+    Ok(Some((session, user)))
+}
+
+pub async fn delete_session_by_token(pool: &DbPool, raw_token: &str) -> anyhow::Result<u64> {
+    let hashed = hash_refresh_token(raw_token);
+    let result = sqlx::query("DELETE FROM sessions WHERE refresh_token = $1")
+        .bind(hashed)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn rotate_session(

@@ -157,6 +157,9 @@ async function fetchJson<T>(
 ): Promise<{ ok: boolean; status: number; json: T | null }> {
   const base = resolveApiBase();
   const url = `${base}${path}`;
+  const fetchInit: RequestInit & { expectedStatuses?: number[] } = { ...init };
+  delete fetchInit.expectedStatuses;
+  delete fetchInit.headers;
   // Build headers and attach CSRF token for unsafe methods if present
   const method = (init.method || 'GET').toString().toUpperCase();
   const headers: Record<string, string> = {
@@ -171,9 +174,9 @@ async function fetchJson<T>(
   }
 
   const resp = await fetch(url, {
+    ...fetchInit,
     credentials: 'include',
     headers,
-    ...init,
   });
 
   let parsed: T | null = null;

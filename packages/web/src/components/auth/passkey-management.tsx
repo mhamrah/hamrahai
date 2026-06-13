@@ -23,14 +23,9 @@ interface PasskeyManagementProps {
  *
  * Simplified management component that:
  * - Lists existing passkeys for the authenticated user
+ * - Adds new passkeys for supported browsers
  * - Allows renaming a passkey
  * - Allows deleting a passkey
- *
- * Removed functionality:
- * - Adding new passkeys (registration flow deprecated in the simplified auth model)
- *
- * NOTE: If multi-passkey add functionality is reintroduced later,
- * you can extend this component with an "Add Passkey" button and flow.
  */
 export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
   const passkeys = useSignal<WebAuthnCredential[]>([]);
@@ -147,7 +142,7 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
     }
   });
 
-  const formatDate = (ts: number) =>
+  const formatDate = (ts: number | string) =>
     new Date(ts).toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
@@ -162,11 +157,11 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
 
   return (
     <div class={props.class || "space-y-6"}>
-      <div class="flex items-start justify-between gap-4">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 class="text-lg font-semibold text-gray-900">Passkeys</h3>
-          <p class="text-sm text-gray-600">
-            Manage the passkeys that can access your account.
+          <h3 class="text-lg font-semibold text-gray-950">Passkeys</h3>
+          <p class="mt-1 text-sm leading-6 text-gray-600">
+            Manage the device passkeys that can access your account.
           </p>
         </div>
         <div class="flex items-center gap-2">
@@ -175,16 +170,16 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
             onClick$={addPasskey}
             disabled={isLoading.value || isAdding.value}
             class={[
-              "rounded-md px-3 py-2 text-sm font-medium text-white shadow",
+              "rounded-lg px-3 py-2 text-sm font-semibold text-white shadow-sm transition",
               isLoading.value || isAdding.value
-                ? "cursor-not-allowed bg-blue-400"
-                : "bg-blue-600 hover:bg-blue-700",
+                ? "cursor-not-allowed bg-gray-400"
+                : "bg-gray-950 hover:bg-gray-800",
             ].join(" ")}
           >
             {isAdding.value ? (
               <span class="flex items-center gap-2">
                 <span class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                Adding…
+                Adding...
               </span>
             ) : (
               "Add Passkey"
@@ -194,22 +189,22 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
       </div>
 
       {error.value && (
-        <div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error.value}
         </div>
       )}
       {success.value && (
-        <div class="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-600">
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           {success.value}
         </div>
       )}
 
       {isLoading.value ? (
         <div class="flex items-center justify-center py-10">
-          <div class="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+          <div class="h-6 w-6 animate-spin rounded-full border-2 border-gray-950 border-t-transparent" />
         </div>
       ) : passkeys.value.length === 0 ? (
-        <div class="rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
+        <div class="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
           <svg
             class="mx-auto h-12 w-12 text-gray-400"
             fill="none"
@@ -224,9 +219,9 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
             />
           </svg>
           <h4 class="mt-4 text-lg font-medium text-gray-900">No passkeys</h4>
-          <p class="mt-2 text-sm text-gray-600">
-            You have no passkeys yet. New sign-ins will prompt you to create
-            one.
+          <p class="mt-2 text-sm leading-6 text-gray-600">
+            Add one now so future sign-ins can use Face ID, Touch ID, Windows
+            Hello, or your device screen lock.
           </p>
         </div>
       ) : (
@@ -236,13 +231,13 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
             return (
               <div
                 key={cred.id}
-                class="rounded-lg border border-gray-200 p-4 transition-colors hover:border-gray-300"
+                class="rounded-lg border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300"
               >
                 <div class="flex items-start justify-between gap-4">
                   <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100">
                       <svg
-                        class="h-5 w-5 text-blue-600"
+                        class="h-5 w-5 text-gray-700"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke-width={1.5}
@@ -266,19 +261,19 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
                                 e.target as HTMLInputElement
                               ).value;
                             }}
-                            class="w-40 rounded border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:ring-blue-500 focus:outline-none"
+                            class="w-40 rounded-lg border border-gray-300 px-2 py-1 text-sm focus:border-gray-500 focus:outline-2"
                           />
                           <button
                             type="button"
                             onClick$={() => saveName(cred.id)}
-                            class="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                            class="rounded-lg bg-gray-950 px-2 py-1 text-xs font-medium text-white hover:bg-gray-800"
                           >
                             Save
                           </button>
                           <button
                             type="button"
                             onClick$={cancelEditing}
-                            class="rounded bg-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-300"
+                            class="rounded-lg bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
                           >
                             Cancel
                           </button>
@@ -290,6 +285,9 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
                           </h4>
                           <p class="text-xs text-gray-500">
                             Created {formatDate(cred.created_at)}
+                            {cred.last_used
+                              ? ` - Last used ${formatDate(cred.last_used)}`
+                              : ""}
                           </p>
                         </>
                       )}
@@ -346,7 +344,7 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
         </div>
       )}
 
-      <div class="rounded-md bg-blue-50 px-4 py-3 text-xs leading-relaxed text-blue-700">
+      <div class="rounded-lg border border-cambridge-blue-200 bg-cambridge-blue-900/5 px-4 py-3 text-xs leading-relaxed text-cambridge-blue-900">
         <strong class="font-medium">About passkeys:</strong> Passkeys let you
         sign in using secure device biometrics (Face ID, Touch ID, Windows
         Hello) instead of passwords. If you delete all passkeys, you will need

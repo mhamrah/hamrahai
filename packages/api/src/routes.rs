@@ -9,18 +9,25 @@ use crate::webauthn;
 use axum::response::IntoResponse;
 use axum::{
     Router,
+    http::{
+        HeaderName, Method,
+        header::{AUTHORIZATION, CONTENT_TYPE},
+    },
+    middleware,
     routing::{delete, get, patch, post},
 };
 use std::sync::Arc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 pub type AppState = (DbPool, Arc<webauthn::WebAuthnConfig>);
 
 // Wrapper handlers that extract pool from tuple state for existing handlers
 async fn auth_native_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
     json: axum::Json<auth::NativeLoginRequest>,
 ) -> impl IntoResponse {
-    auth::auth_native(axum::extract::State(pool), json).await
+    auth::auth_native(axum::extract::State(pool), headers, json).await
 }
 
 async fn auth_refresh_wrapper(
@@ -32,6 +39,20 @@ async fn auth_refresh_wrapper(
 
 async fn auth_validate_wrapper(headers: axum::http::HeaderMap) -> impl IntoResponse {
     auth::auth_validate(headers).await
+}
+
+async fn session_validate_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    auth::session_validate(axum::extract::State(pool), headers).await
+}
+
+async fn session_logout_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    auth::session_logout(axum::extract::State(pool), headers).await
 }
 
 async fn attestation_challenge_wrapper(
@@ -123,6 +144,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/auth/native", post(auth_native_wrapper))
         .route("/api/auth/tokens/refresh", post(auth_refresh_wrapper))
         .route("/api/auth/tokens/validate", get(auth_validate_wrapper))
+        .route("/api/auth/sessions/validate", get(session_validate_wrapper))
+        .route("/api/auth/sessions/logout", post(session_logout_wrapper))
         .route(
             "/api/attestation/challenge",
             post(attestation_challenge_wrapper),
@@ -177,6 +200,10 @@ pub fn create_router(pool: DbPool) -> Router {
             patch(webauthn::update_credential_counter_handler),
         )
         .route(
+            "/api/webauthn/credentials/{id}/name",
+            patch(webauthn::rename_credential_handler),
+        )
+        .route(
             "/api/webauthn/users/{user_id}/credentials",
             get(webauthn::get_user_credentials_handler),
         )
@@ -192,7 +219,32 @@ pub fn create_router(pool: DbPool) -> Router {
             get(latest_summary_for_link_wrapper),
         )
         .route("/v1/links/{id}/tags", post(set_tags_for_link_wrapper))
+        .layer(middleware::from_fn(auth::csrf_cookie_guard))
+        .layer(cors_layer())
         .with_state(state)
+}
+
+fn cors_layer() -> CorsLayer {
+    let allowed = auth::allowed_origins();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, _| {
+            origin
+                .to_str()
+                .is_ok_and(|origin| allowed.iter().any(|allowed| allowed == origin))
+        }))
+        .allow_credentials(true)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            CONTENT_TYPE,
+            AUTHORIZATION,
+            HeaderName::from_static("x-csrf-token"),
+        ])
 }
 
 async fn health() -> impl IntoResponse {

@@ -12,7 +12,8 @@ export interface WebAuthnCredential {
   counter: number;
   transports?: string[];
   name?: string;
-  created_at: number;
+  created_at: number | string;
+  last_used?: number | string | null;
 }
 
 export interface PasskeyAuthenticationResult {

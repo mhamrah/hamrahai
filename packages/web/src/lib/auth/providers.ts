@@ -51,7 +51,7 @@ export async function verifyGoogleToken(idToken: string, event: any): Promise<{
   email: string;
   name?: string;
   picture?: string;
-  providerId: string;
+  provider_id: string;
 }> {
   try {
     // Google's public keys endpoint
@@ -92,7 +92,7 @@ export async function verifyGoogleToken(idToken: string, event: any): Promise<{
       email: payload.email,
       name: typeof payload.name === 'string' ? payload.name : undefined,
       picture: typeof payload.picture === 'string' ? payload.picture : undefined,
-      providerId: typeof payload.sub === 'string' ? payload.sub : '',
+      provider_id: typeof payload.sub === 'string' ? payload.sub : '',
     };
     
   } catch (error) {
@@ -108,7 +108,7 @@ export async function verifyAppleToken(idToken: string, event: any): Promise<{
   email: string;
   name?: string;
   picture?: string;
-  providerId: string;
+  provider_id: string;
 }> {
   try {
     // Apple's public keys endpoint
@@ -154,7 +154,7 @@ export async function verifyAppleToken(idToken: string, event: any): Promise<{
       email: payload.email,
       name: undefined, // Apple doesn't always provide name in token
       picture: undefined, // Apple doesn't provide picture
-      providerId: typeof payload.sub === 'string' ? payload.sub : '',
+      provider_id: typeof payload.sub === 'string' ? payload.sub : '',
     };
     
   } catch (error) {
