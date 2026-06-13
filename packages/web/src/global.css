@@ -30,36 +30,15 @@
     --destructive-foreground: 0 0% 100%;
     --ring: var(--color-cambridge-blue);
     --border-width: 0px;
-    --border-radius: 0;
-    --shadow-base:
-      -3px -3px 6px #bebebe, 3px 3px 6px #ffffff,
-      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
-      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
-    --shadow-sm:
-      3px 3px 6px #bebebe, -3px -3px 6px #ffffff,
-      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
-      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
-    --shadow:
-      4px 4px 8px #bebebe, -4px -4px 8px #ffffff,
-      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
-      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
-    --shadow-md:
-      5px 5px 10px #bebebe, -5px -5px 10px #ffffff,
-      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
-      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
-    --shadow-lg:
-      6px 6px 12px #bebebe, -6px -6px 12px #ffffff,
-      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
-      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
-    --shadow-xl:
-      8px 8px 15px #bebebe, -8px -8px 15px #ffffff,
-      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
-      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
-    --shadow-2xl:
-      10px 10px 20px #bebebe, -10px -10px 20px #ffffff,
-      inset 1px 1px 2px rgba(190, 190, 190, 0.5),
-      inset -1px -1px 2px rgba(255, 255, 255, 0.5);
-    --shadow-inner: inset 4px 4px 8px #bebebe, inset -2px -2px 4px #ffffff;
+    --radius: 8px;
+    --shadow-base: 0 1px 2px rgb(15 23 42 / 0.06);
+    --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.08);
+    --shadow: 0 8px 24px rgb(15 23 42 / 0.08);
+    --shadow-md: 0 12px 32px rgb(15 23 42 / 0.10);
+    --shadow-lg: 0 18px 48px rgb(15 23 42 / 0.12);
+    --shadow-xl: 0 24px 64px rgb(15 23 42 / 0.14);
+    --shadow-2xl: 0 32px 80px rgb(15 23 42 / 0.18);
+    --shadow-inner: inset 0 1px 2px rgb(15 23 42 / 0.08);
     --transform-press: scale(0.95);
   }
   .dark {
@@ -84,29 +63,36 @@
     --destructive-foreground: var(--color-linen);
     --ring: var(--color-cambridge-blue);
     --border-width: 0px;
-    --border-radius: 0;
-    --shadow-base:
-      -3px -3px 6px #2c2c31, 3px 3px 6px #52525b, inset 1px 1px 2px #2c2c31,
-      inset -1px -1px 2px #52525b;
-    --shadow-sm:
-      3px 3px 6px #2c2c31, -3px -3px 6px #52525b, inset 1px 1px 2px #2c2c31,
-      inset -1px -1px 2px #52525b;
-    --shadow:
-      4px 4px 8px #2c2c31, -4px -4px 8px #52525b, inset 1px 1px 2px #2c2c31,
-      inset -1px -1px 2px #52525b;
-    --shadow-md:
-      5px 5px 10px #2c2c31, -5px -5px 10px #52525b, inset 1px 1px 2px #2c2c31,
-      inset -1px -1px 2px #52525b;
-    --shadow-lg:
-      6px 6px 12px #2c2c31, -6px -6px 12px #52525b, inset 1px 1px 2px #2c2c31,
-      inset -1px -1px 2px #52525b;
-    --shadow-xl:
-      8px 8px 15px #2c2c31, -8px -8px 15px #52525b, inset 1px 1px 2px #2c2c31,
-      inset -1px -1px 2px #52525b;
-    --shadow-2xl:
-      10px 10px 20px #2c2c31, -10px -10px 20px #52525b,
-      inset 1px 1px 2px #2c2c31, inset -1px -1px 2px #52525b;
-    --shadow-inner: inset 2px 2px 4px #2c2c31, inset -2px -2px 4px #52525b;
+    --radius: 8px;
+    --shadow-base: 0 1px 2px rgb(0 0 0 / 0.24);
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.28);
+    --shadow: 0 8px 24px rgb(0 0 0 / 0.30);
+    --shadow-md: 0 12px 32px rgb(0 0 0 / 0.34);
+    --shadow-lg: 0 18px 48px rgb(0 0 0 / 0.38);
+    --shadow-xl: 0 24px 64px rgb(0 0 0 / 0.42);
+    --shadow-2xl: 0 32px 80px rgb(0 0 0 / 0.48);
+    --shadow-inner: inset 0 1px 2px rgb(0 0 0 / 0.28);
     --transform-press: scale(0.95);
+  }
+
+  html {
+    background: #f8fafc;
+  }
+
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top left, rgb(132 165 157 / 0.18), transparent 34rem),
+      linear-gradient(180deg, #fbfcfd 0%, #f3f6f8 100%);
+    color: #17211f;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  a,
+  input {
+    outline-color: hsl(var(--ring));
+    outline-offset: 2px;
   }
 }

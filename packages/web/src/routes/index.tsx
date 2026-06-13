@@ -40,87 +40,99 @@ export default component$(() => {
   });
 
   return (
-    <div class="min-h-screen bg-gray-50 py-8">
-      <div class="mx-auto max-w-4xl px-4">
-        <div class="rounded-lg bg-white p-6 shadow">
-          <div class="mb-6 flex items-center justify-between">
-            <h1 class="text-3xl font-bold text-gray-900">Hamrah App</h1>
-            <div class="flex space-x-3">
+    <div class="min-h-screen">
+      <header class="border-b border-gray-200 bg-white/90 backdrop-blur">
+        <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+          <a href="/" class="text-lg font-semibold tracking-tight text-gray-950">
+            Hamrah
+          </a>
+          <nav class="flex items-center gap-2 sm:gap-3">
+            <a
+              href="/settings"
+              data-testid="account-settings"
+              class="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
+            >
+              Settings
+            </a>
+            <LogoutButton />
+          </nav>
+        </div>
+      </header>
+
+      <main class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        <section class="mb-8 flex flex-col gap-6 rounded-lg border border-gray-200 bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between">
+          <div>
+            <p class="text-sm font-medium text-cambridge-blue-700">
+              Signed in
+            </p>
+            <h1 class="mt-2 text-3xl font-semibold tracking-tight text-gray-950">
+              Welcome back, {user.value.name || user.value.email}
+            </h1>
+            <p class="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
+              Your account is protected by a secure API-backed session. Manage
+              passkeys and connected sign-in methods from settings.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            {user.value.picture && (
+              <img
+                data-testid="user-avatar"
+                src={user.value.picture}
+                alt={user.value.name || user.value.email}
+                width="48"
+                height="48"
+                class="h-12 w-12 rounded-full border border-gray-200"
+              />
+            )}
+            <div>
+              <div data-testid="user-name" class="font-medium text-gray-950">
+                {user.value.name || "Hamrah user"}
+              </div>
+              <div data-testid="user-email" class="text-sm text-gray-500">
+                {user.value.email}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
+          <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+            <div class="mb-6 flex items-center justify-between">
+              <div>
+                <h2 class="text-xl font-semibold text-gray-950">
+                  Workspace
+                </h2>
+                <p class="mt-1 text-sm text-gray-600">
+                  A clean starting point for protected Hamrah workflows.
+                </p>
+              </div>
               <div class="relative">
                 <button
                   data-testid="user-menu"
-                  class="flex items-center space-x-2 rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200"
+                  class="hidden"
                 >
-                  {user.value.picture && (
-                    <img
-                      data-testid="user-avatar"
-                      src={user.value.picture}
-                      alt={user.value.name}
-                      width="24"
-                      height="24"
-                      class="h-6 w-6 rounded-full"
-                    />
-                  )}
-                  <span data-testid="user-name">{user.value.name}</span>
-                  <span data-testid="user-email" class="text-xs text-gray-500">
-                    {user.value.email}
-                  </span>
+                  User menu
                 </button>
                 <div data-testid="auth-method" class="hidden">
-                  {user.value.provider === "google" ? "Google" : "Apple"}
+                  {user.value.provider === "google"
+                    ? "Google"
+                    : user.value.provider === "apple"
+                      ? "Apple"
+                      : user.value.auth_method || "Passkey"}
                 </div>
               </div>
-              <a
-                href="/settings"
-                data-testid="account-settings"
-                class="rounded-md bg-gray-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
-              >
-                Settings
-              </a>
-              <LogoutButton />
             </div>
-          </div>
-          <div class="border-t pt-6">
-            <h2 class="mb-4 text-xl font-semibold text-gray-900">
-              Welcome back!
-            </h2>
-            <div class="flex items-center space-x-4">
-              {user.value.picture && (
-                <img
-                  src={user.value.picture}
-                  alt={user.value.name}
-                  width="64"
-                  height="64"
-                  class="h-16 w-16 rounded-full"
-                />
-              )}
-              <div>
-                <p class="text-lg font-medium text-gray-900">
-                  {user.value.name}
-                </p>
-                <p class="text-sm text-gray-600">{user.value.email}</p>
-                <p class="mt-1 text-xs text-gray-500">
-                  User ID: {user.value.id}
-                </p>
-                <p class="text-xs text-gray-500">
-                  Signed in with{" "}
-                  {user.value.provider === "google" ? "Google" : "Apple"}
-                </p>
-                {user.value.providerId && (
-                  <p class="text-xs text-gray-500">
-                    Provider ID: {user.value.providerId}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
 
-          <div class="mt-8 border-t pt-6">
-            <div class="mb-6">
+            <div class="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-6">
+              <h3 class="font-medium text-gray-950">Protected action</h3>
+              <p class="mt-1 text-sm text-gray-600">
+                This confirms the authenticated shell is active for the current
+                server-validated session.
+              </p>
               <button
                 data-testid="protected-action"
                 onClick$={handleProtectedAction}
-                class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+                class="mt-4 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
               >
                 Perform Protected Action
               </button>
@@ -132,11 +144,11 @@ export default component$(() => {
                 Protected action completed successfully!
               </div>
             </div>
+          </section>
 
-            <h3 class="mb-4 text-lg font-semibold text-gray-900">
-              User Details
-            </h3>
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <aside class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-gray-950">Account</h2>
+            <dl class="mt-5 space-y-4">
               <div class="rounded-lg bg-gray-50 p-4">
                 <dt class="text-sm font-medium text-gray-500">User ID</dt>
                 <dd class="mt-1 font-mono text-sm break-all text-gray-900">
@@ -150,30 +162,14 @@ export default component$(() => {
               <div class="rounded-lg bg-gray-50 p-4">
                 <dt class="text-sm font-medium text-gray-500">Provider</dt>
                 <dd class="mt-1 text-sm text-gray-900 capitalize">
-                  {user.value.provider}
+                  {user.value.provider || user.value.auth_method || "passkey"}
                 </dd>
               </div>
-              {user.value.providerId && (
+              {user.value.provider_id && (
                 <div class="rounded-lg bg-gray-50 p-4">
                   <dt class="text-sm font-medium text-gray-500">Provider ID</dt>
                   <dd class="mt-1 font-mono text-sm break-all text-gray-900">
-                    {user.value.providerId}
-                  </dd>
-                </div>
-              )}
-              {user.value.picture && (
-                <div class="rounded-lg bg-gray-50 p-4">
-                  <dt class="text-sm font-medium text-gray-500">
-                    Profile Picture
-                  </dt>
-                  <dd class="mt-2">
-                    <img
-                      src={user.value.picture}
-                      alt={user.value.name}
-                      width="48"
-                      height="48"
-                      class="h-12 w-12 rounded-full"
-                    />
+                    {user.value.provider_id}
                   </dd>
                 </div>
               )}
@@ -187,17 +183,10 @@ export default component$(() => {
                     : "N/A"}
                 </dd>
               </div>
-            </div>
-
-            <div class="mt-6">
-              <p class="text-sm text-gray-600">
-                You're successfully authenticated! This is your protected
-                dashboard.
-              </p>
-            </div>
-          </div>
+            </dl>
+          </aside>
         </div>
-      </div>
+      </main>
     </div>
   );
 });

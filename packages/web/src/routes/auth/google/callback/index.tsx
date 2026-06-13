@@ -82,15 +82,19 @@ export const onGet: RequestHandler = async (event) => {
     const authResult = await apiClient.post("/api/auth/native", {
       email: googleUser.email,
       name: googleUser.name,
+      picture: googleUser.picture,
+      provider: "google",
+      provider_id: googleUser.sub,
+      auth_method: "google",
+      platform: "web",
+      email_verified_at: googleUser.email_verified
+        ? new Date().toISOString()
+        : undefined,
     });
 
-    if (authResult.access_token) {
-      // Note: Fresh profile data (picture, locale, etc.) is not stored in DB
-      // to avoid staleness. For apps requiring up-to-date profile data,
-      // consider storing ID token securely or re-fetching from provider.
-
+    if (authResult.refresh_token) {
       const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30); // 30 days
-      setSessionTokenCookie(event, authResult.access_token, expiresAt);
+      setSessionTokenCookie(event, authResult.refresh_token, expiresAt);
     }
   } catch (error) {
     console.log("could not authenticate with API", error);

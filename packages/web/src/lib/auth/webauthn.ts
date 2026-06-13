@@ -12,7 +12,8 @@ export interface WebAuthnCredential {
   counter: number;
   transports?: string[];
   name?: string;
-  created_at: number;
+  created_at: number | string;
+  last_used?: number | string | null;
 }
 
 export interface PasskeyAuthenticationResult {
@@ -168,6 +169,7 @@ export async function authenticateWithDiscoverablePasskey(): Promise<PasskeyAuth
       challenge_id: beginResponse.options.challenge_id ?? beginResponse.challenge_id,
       response: authResponse,
       mode: 'discoverable-explicit',
+      platform: 'web',
     });
 
     if (!completeResponse.success) {

@@ -1,8 +1,8 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -115,6 +115,7 @@ pub struct AuthenticateVerifyRequest {
     #[serde(alias = "challenge_id")]
     pub challenge_id: Option<String>,
     pub response: PublicKeyCredential,
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +124,10 @@ pub struct AuthenticateVerifyResponse {
     pub message: Option<String>,
     pub user: Option<serde_json::Value>,
     pub session_token: Option<String>,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<i64>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub error: Option<String>,
 }
 
@@ -169,6 +174,11 @@ pub struct CredentialResponse {
 pub struct CredentialCounterUpdateRequest {
     pub counter: i64,
     pub last_used: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CredentialNameUpdateRequest {
+    pub name: String,
 }
 
 // ============================================================================
@@ -314,6 +324,25 @@ pub async fn delete_credential(pool: &PgPool, credential_id: &str) -> Result<(),
         "#,
     )
     .bind(credential_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn rename_credential(
+    pool: &PgPool,
+    credential_id: &str,
+    name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE webauthn_credentials
+        SET name = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(credential_id)
+    .bind(name)
     .execute(pool)
     .await?;
     Ok(())
@@ -578,8 +607,9 @@ pub async fn authenticate_begin(
 
 pub async fn authenticate_verify(
     State((pool, config)): State<(PgPool, Arc<WebAuthnConfig>)>,
+    headers: HeaderMap,
     Json(req): Json<AuthenticateVerifyRequest>,
-) -> impl IntoResponse {
+) -> Response {
     // Get the challenge if provided
     let challenge_id = req.challenge_id.clone().unwrap_or_default();
 
@@ -593,9 +623,14 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some("Challenge not found".to_string()),
                 }),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -609,9 +644,14 @@ pub async fn authenticate_verify(
                 message: None,
                 user: None,
                 session_token: None,
+                access_token: None,
+                refresh_token: None,
+                expires_in: None,
+                expires_at: None,
                 error: Some("Challenge expired".to_string()),
             }),
-        );
+        )
+            .into_response();
     }
 
     // Deserialize the authentication state
@@ -625,9 +665,14 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Invalid challenge state: {}", e)),
                 }),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -645,9 +690,14 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some("Credential not found".to_string()),
                 }),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -663,9 +713,14 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Failed to deserialize passkey: {}", e)),
                 }),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -683,9 +738,14 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Authentication verification failed: {}", e)),
                 }),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -705,9 +765,14 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some("User not found".to_string()),
                 }),
-            );
+            )
+                .into_response();
         }
         Err(e) => {
             return (
@@ -717,15 +782,20 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Failed to fetch user: {}", e)),
                 }),
-            );
+            )
+                .into_response();
         }
     };
 
     // Create a session
     let refresh_token = Uuid::new_v4().to_string();
-    let _session = match crate::db::create_session(&pool, user.id, &refresh_token, 24 * 30).await {
+    let session = match crate::db::create_session(&pool, user.id, &refresh_token, 24 * 30).await {
         Ok(s) => s,
         Err(e) => {
             return (
@@ -735,15 +805,19 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Failed to create session: {}", e)),
                 }),
-            );
+            )
+                .into_response();
         }
     };
 
-    // Issue access token
     let access_token = match crate::auth::issue_access_token(&user) {
-        Ok(t) => t,
+        Ok(token) => token,
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -752,26 +826,40 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Failed to issue access token: {}", e)),
                 }),
-            );
+            )
+                .into_response();
         }
     };
+
+    let include_bearer_tokens = req.platform.as_deref() != Some("web");
 
     // Clean up the challenge
     let _ = delete_challenge(&pool, &challenge_id).await;
 
     // Return success with user and token
-    (
+    let mut response = (
         StatusCode::OK,
         Json(AuthenticateVerifyResponse {
             success: true,
             message: Some("Authentication successful".to_string()),
             user: Some(serde_json::to_value(&user).unwrap_or_default()),
-            session_token: Some(access_token),
+            session_token: Some(refresh_token.clone()),
+            access_token: include_bearer_tokens.then_some(access_token),
+            refresh_token: include_bearer_tokens.then_some(refresh_token.clone()),
+            expires_in: include_bearer_tokens.then_some(3600),
+            expires_at: include_bearer_tokens.then_some(session.expires_at),
             error: None,
         }),
     )
+        .into_response();
+    crate::auth::attach_session_cookies(response.headers_mut(), &headers, &refresh_token);
+    response
 }
 
 // Challenge management endpoints
@@ -927,6 +1015,28 @@ pub async fn update_credential_counter_handler(
         .and_then(chrono::DateTime::from_timestamp_millis);
 
     match update_credential_counter(&pool, &credential_id, req.counter, last_used).await {
+        Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+pub async fn rename_credential_handler(
+    State((pool, _)): State<(PgPool, Arc<WebAuthnConfig>)>,
+    Path(credential_id): Path<String>,
+    Json(req): Json<CredentialNameUpdateRequest>,
+) -> impl IntoResponse {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "success": false, "error": "Name cannot be empty" })),
+        );
+    }
+
+    match rename_credential(&pool, &credential_id, name).await {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

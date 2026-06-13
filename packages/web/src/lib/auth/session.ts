@@ -47,18 +47,41 @@ export async function validateSessionToken(event: RequestEventCommon, token: str
 }
 
 export function setSessionTokenCookie(event: RequestEventCommon, token: string, expires_at: Date): void {
-  event.cookie.set("session", token, {
+  const isLocalhost =
+    event.url.hostname === "localhost" || event.url.hostname === "127.0.0.1";
+  const secure = event.url.protocol === "https:" || !isLocalhost;
+  const sharedCookieOptions = {
     expires: expires_at,
-    sameSite: "none",  // Allow cross-site cookie sending to api.hamrah.app
-    httpOnly: true,
-    secure: true,
+    sameSite: "lax" as const,
+    secure,
     path: "/",
-    domain: ".hamrah.app",  // Share cookie with api.hamrah.app subdomain
+    ...(isLocalhost ? {} : { domain: ".hamrah.app" }),
+  };
+
+  event.cookie.set("session", token, {
+    ...sharedCookieOptions,
+    httpOnly: true,
+  });
+
+  const csrfToken =
+    globalThis.crypto?.randomUUID?.() ||
+    Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+
+  event.cookie.set("csrf_token", csrfToken, {
+    ...sharedCookieOptions,
+    httpOnly: false,
   });
 }
 
 export function deleteSessionTokenCookie(event: RequestEventCommon): void {
   event.cookie.delete("session", { path: "/" });
+  event.cookie.delete("csrf_token", { path: "/" });
+  if (event.url.hostname !== "localhost" && event.url.hostname !== "127.0.0.1") {
+    event.cookie.delete("session", { path: "/", domain: ".hamrah.app" });
+    event.cookie.delete("csrf_token", { path: "/", domain: ".hamrah.app" });
+  }
 }
 
 // Cookie-based session validation (for use in routes that need Cookie access)

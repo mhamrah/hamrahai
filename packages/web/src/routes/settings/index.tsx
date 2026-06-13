@@ -7,29 +7,44 @@ export default component$(() => {
   const user = useUserLoader();
 
   return (
-    <div class="min-h-screen bg-gray-50 py-8">
-      <div class="mx-auto max-w-4xl px-4">
-        <div class="rounded-lg bg-white p-6 shadow">
-          <div class="mb-6 flex items-center justify-between">
-            <h1 class="text-3xl font-bold text-gray-900">Account Settings</h1>
+    <div class="min-h-screen">
+      <header class="border-b border-gray-200 bg-white/90 backdrop-blur">
+        <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+          <a href="/" class="text-lg font-semibold tracking-tight text-gray-950">
+            Hamrah
+          </a>
+          <nav class="flex items-center gap-2">
             <a
               href="/"
-              class="rounded-md bg-gray-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+              class="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
             >
-              Back to Home
+              Dashboard
             </a>
-          </div>
+          </nav>
+        </div>
+      </header>
 
-          {/* User Info Section */}
-          <div class="mb-6 border-b pb-6">
-            <h2 class="mb-4 text-xl font-semibold text-gray-900">
+      <main class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        <div class="mb-8">
+          <p class="text-sm font-medium text-cambridge-blue-700">Account</p>
+          <h1 class="mt-2 text-3xl font-semibold tracking-tight text-gray-950">
+            Settings
+          </h1>
+          <p class="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
+            Manage your profile, connected provider, and passkeys.
+          </p>
+        </div>
+
+        <div class="grid gap-6 lg:grid-cols-[320px_1fr]">
+          <aside class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+            <h2 class="mb-4 text-lg font-semibold text-gray-950">
               Profile Information
             </h2>
             <div class="flex items-center space-x-4">
               {user.value.picture && (
                 <img
                   src={user.value.picture}
-                  alt={user.value.name}
+                  alt={user.value.name || user.value.email}
                   width="64"
                   height="64"
                   class="h-16 w-16 rounded-full"
@@ -37,32 +52,35 @@ export default component$(() => {
               )}
               <div>
                 <p class="text-lg font-medium text-gray-900">
-                  {user.value.name}
+                  {user.value.name || "Hamrah user"}
                 </p>
                 <p class="text-sm text-gray-600">{user.value.email}</p>
                 {user.value.provider && (
                   <p class="mt-1 text-xs text-gray-500">
                     Connected with{" "}
-                    {user.value.provider === "google" ? "Google" : "Apple"}
+                    {user.value.provider === "google"
+                      ? "Google"
+                      : user.value.provider === "apple"
+                        ? "Apple"
+                        : user.value.provider}
                   </p>
                 )}
               </div>
             </div>
-          </div>
+          </aside>
 
-          {/* Security Settings */}
-          <div class="space-y-6">
+          <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
             <div>
-              <h2 class="mb-2 text-xl font-semibold text-gray-900">
-                Security Settings
+              <h2 class="text-xl font-semibold text-gray-950">
+                Security
               </h2>
-              <p class="mb-6 text-sm text-gray-600">
-                Manage your account security and authentication settings.
+              <p class="mt-2 text-sm leading-6 text-gray-600">
+                Add passkeys for passwordless access and review connected
+                sign-in methods.
               </p>
             </div>
 
-            {/* Connected Account Info */}
-            <div class="rounded-lg border border-green-200 bg-green-50 p-4">
+            <div class="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
               <div class="flex items-center">
                 {user.value.provider === "google" ? (
                   <>
@@ -88,7 +106,7 @@ export default component$(() => {
                       Connected with Google
                     </span>
                   </>
-                ) : (
+                ) : user.value.provider === "apple" ? (
                   <>
                     <svg
                       class="mr-2 h-5 w-5 text-green-600"
@@ -101,20 +119,24 @@ export default component$(() => {
                       Connected with Apple
                     </span>
                   </>
+                ) : (
+                  <span class="text-sm font-medium text-green-800">
+                    Passkey-ready account
+                  </span>
                 )}
               </div>
             </div>
 
             {/* Passkey Management */}
-            <div class="border-t pt-6">
+            <div class="mt-6 border-t border-gray-200 pt-6">
               <PasskeyManagement
                 userId={user.value.id}
                 userEmail={user.value.email}
               />
             </div>
-          </div>
+          </section>
         </div>
-      </div>
+      </main>
     </div>
   );
 });

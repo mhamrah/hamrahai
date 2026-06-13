@@ -50,13 +50,31 @@ export default component$(() => {
   });
 
   return (
-    <div class="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12 sm:px-6 lg:px-8">
-      <div class="w-full max-w-md space-y-8">
-        {/* Header with login indication */}
-        <div class="text-center">
+    <div class="grid min-h-screen bg-slate-50 px-4 py-8 lg:grid-cols-[1fr_440px] lg:px-0 lg:py-0">
+      <section class="hidden items-center px-12 lg:flex">
+        <div class="max-w-xl">
+          <div class="mb-8 inline-flex rounded-full border border-cambridge-blue-200 bg-white/80 px-3 py-1 text-sm font-medium text-cambridge-blue-800 shadow-sm">
+            Private, fast, passwordless
+          </div>
+          <h1 class="text-5xl font-semibold tracking-tight text-gray-950">
+            Your knowledge workspace, ready when you are.
+          </h1>
+          <p class="mt-5 text-lg leading-8 text-gray-600">
+            Hamrah keeps account access simple: passkeys first, trusted OAuth
+            fallback, and secure sessions handled by the API.
+          </p>
+        </div>
+      </section>
+
+      <main class="flex items-center justify-center lg:bg-white lg:px-10">
+        <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white p-6 shadow-lg lg:border-0 lg:p-0 lg:shadow-none">
+          <div class="mb-8 flex items-center justify-between">
+            <a href="/" class="text-lg font-semibold tracking-tight text-gray-950">
+              Hamrah
+            </a>
           <button
             data-testid="login-button"
-            class="cursor-default text-sm text-indigo-600 hover:text-indigo-500"
+            class="cursor-default rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600"
             disabled
           >
             Sign In Required
@@ -69,6 +87,7 @@ export default component$(() => {
           initialError={initialError.value}
         />
       </div>
+      </main>
     </div>
   );
 });

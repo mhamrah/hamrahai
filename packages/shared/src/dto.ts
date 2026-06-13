@@ -39,9 +39,9 @@ export interface ApiUserWire {
 }
 
 /**
- * Internal (optional) normalized user shape.
+ * Internal (optional) parsed user shape.
  * NOTE: Kept here for convenience; do NOT send this over the wire.
- * You may choose not to use this if you keep everything snake_case internally.
+ * Field names intentionally stay snake_case to match the auth wire contract.
  */
 export interface AppUser {
   id: string;
@@ -49,13 +49,13 @@ export interface AppUser {
   name?: string | null;
   picture?: string | null;
   provider?: string | null;
-  authMethod?: string | null;
-  providerId?: string | null;
-  createdAt: Date;
-  updatedAt?: Date;
-  lastLoginAt?: Date | null;
-  lastLoginPlatform?: string | null;
-  emailVerifiedAt?: Date | null;
+  auth_method?: string | null;
+  provider_id?: string | null;
+  created_at: Date;
+  updated_at?: Date;
+  last_login_at?: Date | null;
+  last_login_platform?: string | null;
+  email_verified_at?: Date | null;
 }
 
 /* -------------------------- API Response Envelopes ------------------------- */
@@ -156,19 +156,26 @@ export interface AuthVerifyDiscoverableResponse {
   success: boolean;
   user?: ApiUserWire;
   session_token?: string;
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  expires_at?: string;
   error?: string;
 }
 
 /* ------------------------------ Native Auth Flow --------------------------- */
 
 export interface NativeAuthRequest {
-  provider: "apple" | "google";
-  credential: string; // ID token
+  provider?: "apple" | "google" | "webauthn";
+  credential?: string; // ID token
   email?: string;
   name?: string;
   picture?: string;
-  platform?: "web" | "ios" | "android";
+  provider_id?: string;
+  auth_method?: string;
+  platform?: "web" | "ios" | "android" | "api";
   client_attestation?: string;
+  email_verified_at?: string;
 }
 
 export interface NativeAuthResponse {
@@ -177,6 +184,7 @@ export interface NativeAuthResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  expires_at?: string;
   error?: string;
 }
 
@@ -192,13 +200,13 @@ export function mapApiUserWireToAppUser(user: ApiUserWire): AppUser {
     name: user.name ?? null,
     picture: user.picture ?? null,
     provider: user.provider ?? null,
-    authMethod: user.auth_method ?? null,
-    providerId: user.provider_id ?? null,
-    createdAt: new Date(user.created_at),
-    updatedAt: user.updated_at ? new Date(user.updated_at) : undefined,
-    lastLoginAt: user.last_login_at ? new Date(user.last_login_at) : null,
-    lastLoginPlatform: user.last_login_platform ?? null,
-    emailVerifiedAt: user.email_verified_at
+    auth_method: user.auth_method ?? null,
+    provider_id: user.provider_id ?? null,
+    created_at: new Date(user.created_at),
+    updated_at: user.updated_at ? new Date(user.updated_at) : undefined,
+    last_login_at: user.last_login_at ? new Date(user.last_login_at) : null,
+    last_login_platform: user.last_login_platform ?? null,
+    email_verified_at: user.email_verified_at
       ? new Date(user.email_verified_at)
       : null,
   };

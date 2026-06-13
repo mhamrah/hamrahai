@@ -2,6 +2,9 @@ packages:
   - 'packages/web'
   - 'packages/shared'
 
+overrides:
+  esbuild: 0.28.1
+
 allowBuilds:
   esbuild: true
   sharp: true
