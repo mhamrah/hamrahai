@@ -115,6 +115,7 @@ pub struct AuthenticateVerifyRequest {
     #[serde(alias = "challenge_id")]
     pub challenge_id: Option<String>,
     pub response: PublicKeyCredential,
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +124,10 @@ pub struct AuthenticateVerifyResponse {
     pub message: Option<String>,
     pub user: Option<serde_json::Value>,
     pub session_token: Option<String>,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<i64>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub error: Option<String>,
 }
 
@@ -618,6 +623,10 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some("Challenge not found".to_string()),
                 }),
             )
@@ -635,6 +644,10 @@ pub async fn authenticate_verify(
                 message: None,
                 user: None,
                 session_token: None,
+                access_token: None,
+                refresh_token: None,
+                expires_in: None,
+                expires_at: None,
                 error: Some("Challenge expired".to_string()),
             }),
         )
@@ -652,6 +665,10 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Invalid challenge state: {}", e)),
                 }),
             )
@@ -673,6 +690,10 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some("Credential not found".to_string()),
                 }),
             )
@@ -692,6 +713,10 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Failed to deserialize passkey: {}", e)),
                 }),
             )
@@ -713,6 +738,10 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Authentication verification failed: {}", e)),
                 }),
             )
@@ -736,6 +765,10 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some("User not found".to_string()),
                 }),
             )
@@ -749,6 +782,10 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Failed to fetch user: {}", e)),
                 }),
             )
@@ -758,7 +795,7 @@ pub async fn authenticate_verify(
 
     // Create a session
     let refresh_token = Uuid::new_v4().to_string();
-    let _session = match crate::db::create_session(&pool, user.id, &refresh_token, 24 * 30).await {
+    let session = match crate::db::create_session(&pool, user.id, &refresh_token, 24 * 30).await {
         Ok(s) => s,
         Err(e) => {
             return (
@@ -768,12 +805,39 @@ pub async fn authenticate_verify(
                     message: None,
                     user: None,
                     session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
                     error: Some(format!("Failed to create session: {}", e)),
                 }),
             )
                 .into_response();
         }
     };
+
+    let access_token = match crate::auth::issue_access_token(&user) {
+        Ok(token) => token,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthenticateVerifyResponse {
+                    success: false,
+                    message: None,
+                    user: None,
+                    session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
+                    error: Some(format!("Failed to issue access token: {}", e)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let include_bearer_tokens = req.platform.as_deref() != Some("web");
 
     // Clean up the challenge
     let _ = delete_challenge(&pool, &challenge_id).await;
@@ -786,6 +850,10 @@ pub async fn authenticate_verify(
             message: Some("Authentication successful".to_string()),
             user: Some(serde_json::to_value(&user).unwrap_or_default()),
             session_token: Some(refresh_token.clone()),
+            access_token: include_bearer_tokens.then_some(access_token),
+            refresh_token: include_bearer_tokens.then_some(refresh_token.clone()),
+            expires_in: include_bearer_tokens.then_some(3600),
+            expires_at: include_bearer_tokens.then_some(session.expires_at),
             error: None,
         }),
     )

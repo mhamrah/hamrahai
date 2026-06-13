@@ -107,10 +107,14 @@ struct NativeLoginView: View {
                 .accessibilityIdentifier("googleSignInButton")
 
                 // Passkey Sign-In
-                Button(action: { showingEmailInput = true }) {
+                Button(action: {
+                    Task {
+                        await authManager.signInWithPasskey()
+                    }
+                }) {
                     authButtonLabel(
                         symbol: "key",
-                        title: "Sign in with Email + Passkey",
+                        title: "Continue with Passkey",
                         background: .purple
                     )
                 }

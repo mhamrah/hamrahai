@@ -156,6 +156,10 @@ export interface AuthVerifyDiscoverableResponse {
   success: boolean;
   user?: ApiUserWire;
   session_token?: string;
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  expires_at?: string;
   error?: string;
 }
 

@@ -433,12 +433,12 @@ class NativeAuthManager: NSObject, ObservableObject {
         }
     }
 
-    func signInWithPasskey(email: String) async {
+    func signInWithPasskey(email: String? = nil) async {
         isLoading = true
         errorMessage = nil
 
         do {
-            print("🔐 Starting Passkey authentication for \(email)...")
+            print("🔐 Starting Passkey authentication...")
 
             // Step 1: Begin WebAuthn authentication
             let beginOptions = try await beginWebAuthnAuthentication(email: email)
@@ -467,7 +467,7 @@ class NativeAuthManager: NSObject, ObservableObject {
 
     private func beginWebAuthnAuthentication(email: String?) async throws -> WebAuthnBeginResponse {
         var body: [String: Any] = ["explicit": true]  // flag for explicit discoverable auth
-        if let email = email {
+        if let email = email, !email.isEmpty {
             body["email"] = email
         }
 
@@ -524,23 +524,32 @@ class NativeAuthManager: NSObject, ObservableObject {
                 "response": authResponseData,
                 "challenge_id": challengeId,
                 "mode": "discoverable-explicit",
+                "platform": "ios",
             ] as [String: Any]
 
         struct PasskeyAuthResponse: Codable {
             let success: Bool
             let user: HamrahUser?
-            let session_token: String?
+            let accessToken: String?
+            let refreshToken: String?
+            let expiresIn: Int?
+            let expiresAt: String?
+            let sessionToken: String?
             let error: String?
 
             enum CodingKeys: String, CodingKey {
                 case success
                 case user
-                case session_token
+                case accessToken = "access_token"
+                case refreshToken = "refresh_token"
+                case expiresIn = "expires_in"
+                case expiresAt = "expires_at"
+                case sessionToken = "session_token"
                 case error
             }
         }
 
-        // Directly call the new verify endpoint (no cookie extraction required; session token returned in body)
+        // Native clients receive bearer tokens; web clients rely on the HttpOnly session cookie.
         let result = try await secureAPI.post(
             endpoint: "/api/webauthn/authenticate/discoverable/verify",
             body: body,
@@ -549,20 +558,29 @@ class NativeAuthManager: NSObject, ObservableObject {
             customBaseURL: baseURL
         )
 
-        guard result.success, let user = result.user, let token = result.session_token else {
+        guard result.success, let user = result.user, let accessToken = result.accessToken else {
             throw NSError(
                 domain: "WebAuthn", code: -1,
                 userInfo: [NSLocalizedDescriptionKey: result.error ?? "Authentication failed"])
         }
 
         self.currentUser = user
-        self.accessToken = token
+        self.accessToken = accessToken
         self.isAuthenticated = true
         self.setLastUsedEmail(user.email)
+
+        if let refreshToken = result.refreshToken ?? result.sessionToken {
+            _ = KeychainManager.shared.store(refreshToken, for: "hamrah_refresh_token")
+        }
+        if let expiresIn = result.expiresIn {
+            _ = KeychainManager.shared.store(
+                Date().timeIntervalSince1970 + TimeInterval(expiresIn),
+                for: "hamrah_token_expires_at")
+        }
         self.storeAuthState()
 
         // Initialize App Attestation (blocks on first install, skips if already initialized)
-        await secureAPI.initializeAttestation(accessToken: token)
+        await secureAPI.initializeAttestation(accessToken: accessToken)
 
         print("✅ Passkey authentication successful")
     }

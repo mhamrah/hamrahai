@@ -169,6 +169,7 @@ export async function authenticateWithDiscoverablePasskey(): Promise<PasskeyAuth
       challenge_id: beginResponse.options.challenge_id ?? beginResponse.challenge_id,
       response: authResponse,
       mode: 'discoverable-explicit',
+      platform: 'web',
     });
 
     if (!completeResponse.success) {
