@@ -64,6 +64,11 @@ jobs:
             -derivedDataPath "${DERIVED_DATA_PATH}" \
             -disablePackageRepositoryCache
 
+      - name: Validate export compliance declaration
+        run: |
+          test "$(plutil -extract ITSAppUsesNonExemptEncryption raw packages/ios/hamrah-ios/Info.plist)" = "false"
+          test "$(plutil -extract ITSAppUsesNonExemptEncryption raw packages/ios/hamrah-share/Info.plist)" = "false"
+
       - name: Select iPhone simulator
         run: |
           echo "IOS_TEST_DESTINATION=platform=iOS Simulator,name=iPhone 17,OS=26.5" >> "$GITHUB_ENV"
