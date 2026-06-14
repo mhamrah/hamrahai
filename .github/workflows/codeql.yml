@@ -1,0 +1,110 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: "22 9 * * 1"
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  security-events: write
+
+jobs:
+  javascript-typescript:
+    name: Analyze JavaScript/TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:javascript-typescript"
+
+  rust:
+    name: Analyze Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+          build-mode: none
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:rust"
+
+  swift:
+    name: Analyze Swift
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    env:
+      PROJECT_PATH: packages/ios/hamrah-ios.xcodeproj
+      SCHEME: hamrah-ios
+      DERIVED_DATA_PATH: /tmp/CodeQLDerivedData
+      IOS_TEST_DESTINATION: platform=iOS Simulator,name=iPhone 17,OS=26.5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+          queries: security-extended
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            -disablePackageRepositoryCache
+
+      - name: Build iOS app for analysis
+        run: |
+          xcodebuild build \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -destination "${IOS_TEST_DESTINATION}" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:swift"
