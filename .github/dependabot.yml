@@ -1,11 +1,107 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # Web app: pnpm workspace rooted at / with packages in packages/web and
+  # packages/shared. Dependabot uses the npm ecosystem value for pnpm.
+  - package-ecosystem: "npm"
+    directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "web"
+    commit-message:
+      prefix: "deps(web)"
+      include: "scope"
+    groups:
+      web-runtime:
+        dependency-type: "production"
+        patterns:
+          - "*"
+      web-tooling:
+        dependency-type: "development"
+        patterns:
+          - "*"
+
+  # API app: Rust backend dependencies and packages/api/Cargo.lock.
+  - package-ecosystem: "cargo"
+    directory: "/packages/api"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "api"
+    commit-message:
+      prefix: "deps(api)"
+    groups:
+      api-rust-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # API container base image in packages/api/Dockerfile.
+  - package-ecosystem: "docker"
+    directory: "/packages/api"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:30"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "api"
+      - "docker"
+    commit-message:
+      prefix: "deps(api-docker)"
+
+  # iOS/macOS app: Swift Package Manager dependencies resolved by the Xcode
+  # project workspace.
+  - package-ecosystem: "swift"
+    directory: "/packages/ios/hamrah-ios.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ios"
+    commit-message:
+      prefix: "deps(ios)"
+    groups:
+      ios-swiftpm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # CI/CD workflows shared by the three apps.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps(actions)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
