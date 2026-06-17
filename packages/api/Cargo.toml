@@ -17,7 +17,7 @@ dotenvy = "0.15"
 # Auth & Security
 uuid = { version = "1", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 rand = "0.10"
 base64 = "0.22"
 sha2 = "0.11"
