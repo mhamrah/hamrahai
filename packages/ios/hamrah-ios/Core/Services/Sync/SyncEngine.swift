@@ -322,6 +322,18 @@ protocol LinkAPI {
     func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse
 }
 
+#if DEBUG
+    struct PreviewLinkAPI: LinkAPI {
+        func postLink(payload: OutboundLinkPayload, token: String?) async throws -> PostLinkResponse {
+            PostLinkResponse(serverId: payload.clientId, canonicalUrl: payload.url)
+        }
+
+        func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse {
+            DeltaResponse(links: [], nextCursor: nil)
+        }
+    }
+#endif
+
 // MARK: - LinkAPI DTOs
 
 /// Outbound payload for creating a link (strict schema, snake_case keys):

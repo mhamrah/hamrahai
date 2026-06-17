@@ -330,10 +330,10 @@ struct InboxToolbarModifier: ViewModifier {
                         .disabled(syncing)
                         NavigationLink {
                             SettingsView()
-                            .environmentObject(authManager)
-                            .environmentObject(biometricManager)
+                                .environmentObject(authManager)
+                                .environmentObject(biometricManager)
                         } label: {
-                            Image(systemName: "gearshape")
+                            Label("Account", systemImage: "person.crop.circle")
                         }
                     }
                 }
@@ -367,10 +367,10 @@ struct InboxToolbarModifier: ViewModifier {
                         .disabled(syncing)
                         NavigationLink {
                             SettingsView()
-                            .environmentObject(authManager)
-                            .environmentObject(biometricManager)
+                                .environmentObject(authManager)
+                                .environmentObject(biometricManager)
                         } label: {
-                            Image(systemName: "gearshape")
+                            Label("Account", systemImage: "person.crop.circle")
                         }
                     }
                 }
@@ -385,7 +385,7 @@ struct InboxToolbarModifier: ViewModifier {
         static var previews: some View {
             InboxView()
                 .modelContainer(previewContainer)
-                .environmentObject(SyncEngine(modelContainer: previewContainer))
+                .environmentObject(SyncEngine(api: PreviewLinkAPI(), modelContainer: previewContainer))
         }
 
         static var previewContainer: ModelContainer = {
