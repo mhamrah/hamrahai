@@ -221,9 +221,9 @@ pub async fn session_validate(State(pool): State<DbPool>, headers: HeaderMap) ->
     }
 }
 
-pub async fn session_logout(State(pool): State<DbPool>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(response) = validate_unsafe_cookie_request(&headers) {
-        return response;
+pub async fn session_logout(State(pool): State<DbPool>, headers: HeaderMap) -> Response {
+    if let Err(status) = validate_unsafe_cookie_request(&headers) {
+        return status.into_response();
     }
 
     if let Some(session_token) = read_cookie(&headers, SESSION_COOKIE) {
@@ -251,10 +251,10 @@ pub fn require_claims(headers: &HeaderMap) -> anyhow::Result<Claims> {
 }
 
 pub async fn csrf_cookie_guard(req: Request, next: Next) -> Response {
-    if requires_csrf_check(&req) {
-        if let Err(response) = validate_unsafe_cookie_request(req.headers()) {
-            return response;
-        }
+    if requires_csrf_check(&req)
+        && let Err(status) = validate_unsafe_cookie_request(req.headers())
+    {
+        return status.into_response();
     }
 
     next.run(req).await
@@ -383,10 +383,10 @@ fn requires_csrf_check(req: &Request) -> bool {
     !creates_session && read_cookie(req.headers(), SESSION_COOKIE).is_some()
 }
 
-fn validate_unsafe_cookie_request(headers: &HeaderMap) -> Result<(), Response> {
+fn validate_unsafe_cookie_request(headers: &HeaderMap) -> Result<(), StatusCode> {
     if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
         if !allowed_origins().iter().any(|allowed| allowed == origin) {
-            return Err(StatusCode::FORBIDDEN.into_response());
+            return Err(StatusCode::FORBIDDEN);
         }
 
         let csrf_cookie = read_cookie(headers, CSRF_COOKIE);
@@ -396,7 +396,7 @@ fn validate_unsafe_cookie_request(headers: &HeaderMap) -> Result<(), Response> {
             .map(str::to_string);
 
         if csrf_cookie.is_none() || csrf_cookie != csrf_header {
-            return Err(StatusCode::FORBIDDEN.into_response());
+            return Err(StatusCode::FORBIDDEN);
         }
     }
     Ok(())
