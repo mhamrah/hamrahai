@@ -1,0 +1,66 @@
+name: API - CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'packages/api/**'
+      - '.github/workflows/api-ci.yml'
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: api-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Detect API changes
+        id: changes
+        working-directory: .
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" | grep -E '^(packages/api/|\.github/workflows/api-ci\.yml$)'; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip API tests
+        if: steps.changes.outputs.should_run != 'true'
+        working-directory: .
+        run: echo "No API package changes detected."
+
+      - name: Format check
+        if: steps.changes.outputs.should_run == 'true'
+        run: cargo fmt --check
+
+      - name: Clippy
+        if: steps.changes.outputs.should_run == 'true'
+        run: cargo clippy -- -D warnings
+
+      - name: Run tests
+        if: steps.changes.outputs.should_run == 'true'
+        run: cargo test

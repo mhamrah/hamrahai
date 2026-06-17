@@ -4,6 +4,7 @@ packages:
 
 overrides:
   esbuild: 0.28.1
+  ws: 8.21.0
 
 allowBuilds:
   esbuild: true

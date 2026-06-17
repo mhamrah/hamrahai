@@ -5,12 +5,13 @@ on:
     branches: [main, develop]
     paths:
       - 'packages/web/**'
+      - 'packages/shared/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
       - '.github/workflows/web-ci.yml'
   pull_request:
     branches: [main, develop]
-    paths:
-      - 'packages/web/**'
-      - '.github/workflows/web-ci.yml'
 
 jobs:
   test:
