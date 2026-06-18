@@ -103,6 +103,7 @@ jobs:
       - name: Run E2E tests
         run: pnpm exec playwright test
         env:
+          HOME: /root
           NODE_ENV: test
           HAMRAH_E2E_BASE_URL: http://127.0.0.1:5173
 
