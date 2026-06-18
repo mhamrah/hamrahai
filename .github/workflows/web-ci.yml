@@ -160,6 +160,8 @@ jobs:
     needs: test
     permissions:
       contents: read
+      security-events: write
+      actions: read
     defaults:
       run:
         working-directory: packages/web
@@ -185,3 +187,12 @@ jobs:
 
       - name: Run security audit
         run: pnpm audit --audit-level moderate
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
