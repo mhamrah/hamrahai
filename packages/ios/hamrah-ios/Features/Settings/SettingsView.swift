@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var infoMessage: String?
+    @State private var passkeysLoadMessage: String?
     @State private var showErrorAlert = false
     @State private var showConfirmDialog = false
     @State private var credentialToDelete: PasskeyCredential?
@@ -65,7 +66,7 @@ struct SettingsView: View {
             seedLocalFromStore()
             await fetchModelCatalog()
             await loadFromServerIfEmpty()
-            loadPasskeys()
+            loadPasskeys(showAlertOnFailure: false)
         }
         .alert(
             "Error", isPresented: .constant(errorMessage != nil),
@@ -153,7 +154,7 @@ struct SettingsView: View {
                 // Add additional auth providers
                 if user.authMethod != "google" {
                     Button(action: {
-                        Task { await authManager.signInWithGoogle() }
+                        addGoogleSignIn()
                     }) {
                         HStack {
                             Image(systemName: "g.circle.fill")
@@ -271,6 +272,12 @@ struct SettingsView: View {
                 ProgressView("Loading passkeys...")
                     .frame(maxWidth: .infinity)
                     .padding()
+            } else if let passkeysLoadMessage {
+                Label(passkeysLoadMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
             } else if passkeys.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "key.fill")
@@ -306,7 +313,7 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showAddPasskey) {
             AddPasskeyView(onPasskeyAdded: {
-                loadPasskeys()
+                loadPasskeys(showAlertOnFailure: false)
             })
             .environmentObject(authManager)
             #if os(macOS)
@@ -622,7 +629,19 @@ struct SettingsView: View {
         }
     }
 
-    private func loadPasskeys() {
+    private func addGoogleSignIn() {
+        errorMessage = nil
+        Task {
+            await authManager.signInWithGoogle()
+            await MainActor.run {
+                if let message = authManager.errorMessage {
+                    self.errorMessage = message
+                }
+            }
+        }
+    }
+
+    private func loadPasskeys(showAlertOnFailure: Bool = false) {
         // Debug authentication state
         print("🔍 MyAccountView Authentication Debug:")
         print("  Current User: \(authManager.currentUser?.email ?? "nil")")
@@ -630,25 +649,36 @@ struct SettingsView: View {
         print("  Is Authenticated: \(authManager.isAuthenticated)")
 
         guard let accessToken = authManager.accessToken else {
-            errorMessage = "Not authenticated. Please sign in again."
-            showErrorAlert = true
+            passkeysLoadMessage = "Sign in to view passkeys."
+            if showAlertOnFailure {
+                errorMessage = "Not authenticated. Please sign in again."
+                showErrorAlert = true
+            }
             return
         }
 
         isLoading = true
-        errorMessage = nil
+        passkeysLoadMessage = nil
+        if showAlertOnFailure {
+            errorMessage = nil
+        }
 
         Task {
             do {
                 let credentials = try await fetchPasskeys(accessToken: accessToken)
                 await MainActor.run {
                     self.passkeys = credentials
+                    self.passkeysLoadMessage = nil
                     self.isLoading = false
                 }
             } catch {
                 await MainActor.run {
-                    self.errorMessage = "Failed to load passkeys: \(error.localizedDescription)"
-                    self.showErrorAlert = true
+                    self.passkeys = []
+                    self.passkeysLoadMessage = "Passkeys couldn't be loaded right now."
+                    if showAlertOnFailure {
+                        self.errorMessage = "Failed to load passkeys: \(error.localizedDescription)"
+                        self.showErrorAlert = true
+                    }
                     self.isLoading = false
                 }
             }

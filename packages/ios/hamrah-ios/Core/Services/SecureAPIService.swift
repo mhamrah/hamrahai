@@ -55,11 +55,11 @@ class SecureAPIService: ObservableObject {
         let challenge = generateRequestChallenge(url: url, method: method, body: body)
 
         // Add App Attestation headers (required)
-        let attestationHeaders = try await attestationManager.generateAttestationHeaders(
-            for: challenge)
-        for (key, value) in attestationHeaders {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
+        try await applyAttestationHeaders(
+            to: &request,
+            challenge: challenge,
+            accessToken: accessToken
+        )
 
         // Add challenge for server verification
         request.setValue(challenge.base64EncodedString(), forHTTPHeaderField: "X-Request-Challenge")
@@ -80,7 +80,7 @@ class SecureAPIService: ObservableObject {
                 attestationManager.clearAttestationFlag()
 
                 do {
-                    try await attestationManager.initializeAttestation(accessToken: token)
+                    try await initializeAttestationWithRecovery(accessToken: token)
                     print("✅ Attestation re-initialized, retrying request")
 
                     // Retry the request once
@@ -116,26 +116,10 @@ class SecureAPIService: ObservableObject {
     /// Initialize attestation (should be called after login)
     func initializeAttestation(accessToken: String) async {
         do {
-            try await attestationManager.initializeAttestation(accessToken: accessToken)
+            try await initializeAttestationWithRecovery(accessToken: accessToken)
             print("✅ App Attestation initialized successfully")
         } catch {
             print("⚠️ Failed to initialize App Attestation: \(error)")
-
-            #if os(iOS)
-                // If we get a DCError code 2 (invalid key), try a force reset and retry once
-                if let dcError = error as? DCError, dcError.code.rawValue == 2 {
-                    print("🔄 Detected DCError code 2 - attempting force reset and retry...")
-                    attestationManager.forceReset()
-
-                    do {
-                        try await attestationManager.initializeAttestation(accessToken: accessToken)
-                        print("✅ App Attestation initialized successfully after reset")
-                    } catch {
-                        print("⚠️ App Attestation still failing after reset: \(error)")
-                        print("💡 Continuing with fallback headers - app will still work")
-                    }
-                }
-            #endif
             // Continue without attestation - app should still work with fallback headers
         }
     }
@@ -273,11 +257,11 @@ class SecureAPIService: ObservableObject {
 
         // App Attestation
         let challenge = generateRequestChallenge(url: url, method: .HEAD, body: nil)
-        let attestationHeaders = try await attestationManager.generateAttestationHeaders(
-            for: challenge)
-        for (key, value) in attestationHeaders {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
+        try await applyAttestationHeaders(
+            to: &request,
+            challenge: challenge,
+            accessToken: accessToken
+        )
         request.setValue(challenge.base64EncodedString(), forHTTPHeaderField: "X-Request-Challenge")
 
         // Execute
@@ -292,7 +276,7 @@ class SecureAPIService: ObservableObject {
                 print("⚠️ 401 Unauthorized - Attempting to re-initialize attestation")
                 attestationManager.clearAttestationFlag()
                 do {
-                    try await attestationManager.initializeAttestation(accessToken: token)
+                    try await initializeAttestationWithRecovery(accessToken: token)
                     print("✅ Attestation re-initialized, retrying request")
                     return try await headRaw(
                         endpoint: endpoint,
@@ -341,11 +325,11 @@ class SecureAPIService: ObservableObject {
 
         // App Attestation
         let challenge = generateRequestChallenge(url: url, method: .GET, body: nil)
-        let attestationHeaders = try await attestationManager.generateAttestationHeaders(
-            for: challenge)
-        for (key, value) in attestationHeaders {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
+        try await applyAttestationHeaders(
+            to: &request,
+            challenge: challenge,
+            accessToken: accessToken
+        )
         request.setValue(challenge.base64EncodedString(), forHTTPHeaderField: "X-Request-Challenge")
 
         // Execute download
@@ -360,7 +344,7 @@ class SecureAPIService: ObservableObject {
                 print("⚠️ 401 Unauthorized - Attempting to re-initialize attestation")
                 attestationManager.clearAttestationFlag()
                 do {
-                    try await attestationManager.initializeAttestation(accessToken: token)
+                    try await initializeAttestationWithRecovery(accessToken: token)
                     print("✅ Attestation re-initialized, retrying request")
                     return try await downloadRaw(
                         endpoint: endpoint,
@@ -402,6 +386,75 @@ class SecureAPIService: ObservableObject {
         challengeString += ":\(Date().timeIntervalSince1970)"
 
         return challengeString.data(using: .utf8) ?? Data()
+    }
+
+    private func applyAttestationHeaders(
+        to request: inout URLRequest,
+        challenge: Data,
+        accessToken: String?
+    ) async throws {
+        do {
+            let headers = try await attestationManager.generateAttestationHeaders(for: challenge)
+            setAttestationHeaders(headers, on: &request)
+        } catch {
+            guard let token = accessToken, Self.isRecoverableAttestationError(error) else {
+                throw APIError.attestationFailed(error.localizedDescription)
+            }
+
+            print("⚠️ App Attestation header generation failed; resetting and retrying: \(error)")
+            attestationManager.forceReset()
+
+            do {
+                try await attestationManager.initializeAttestation(accessToken: token)
+                let headers = try await attestationManager.generateAttestationHeaders(for: challenge)
+                setAttestationHeaders(headers, on: &request)
+                print("✅ App Attestation headers generated after reset")
+            } catch {
+                throw APIError.attestationFailed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func setAttestationHeaders(_ headers: [String: String], on request: inout URLRequest) {
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+    }
+
+    private func initializeAttestationWithRecovery(accessToken: String) async throws {
+        do {
+            try await attestationManager.initializeAttestation(accessToken: accessToken)
+        } catch {
+            guard Self.isRecoverableAttestationError(error) else {
+                throw error
+            }
+
+            print("🔄 Recoverable App Attestation error detected; force resetting and retrying...")
+            attestationManager.forceReset()
+            try await attestationManager.initializeAttestation(accessToken: accessToken)
+        }
+    }
+
+    static func isRecoverableAttestationError(_ error: Error) -> Bool {
+        #if os(iOS)
+            if let dcError = error as? DCError {
+                return dcError.code == .invalidInput || dcError.code == .invalidKey
+                    || dcError.code == .unknownSystemFailure
+            }
+
+            let nsError = error as NSError
+            if nsError.domain == DCErrorDomain {
+                return nsError.code == DCError.Code.invalidInput.rawValue
+                    || nsError.code == DCError.Code.invalidKey.rawValue
+                    || nsError.code == DCError.Code.unknownSystemFailure.rawValue
+            }
+
+            if case AttestationError.keyGenerationFailed = error {
+                return true
+            }
+        #endif
+
+        return false
     }
 
     // Extracts `sub` (user id) from a JWT access token (base64url JSON payload).
