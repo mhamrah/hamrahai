@@ -61,6 +61,8 @@ jobs:
 
   e2e-tests:
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.0-noble
     timeout-minutes: 15
     needs: test
     defaults:
@@ -86,9 +88,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --config.trust-lockfile=true
 
-      - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps
-
       - name: Build application
         run: pnpm build
 
@@ -102,7 +101,7 @@ jobs:
           timeout 60s bash -c 'until curl -f http://127.0.0.1:5173/; do sleep 2; done'
 
       - name: Run E2E tests
-        run: pnpm test:e2e
+        run: pnpm exec playwright test
         env:
           NODE_ENV: test
           HAMRAH_E2E_BASE_URL: http://127.0.0.1:5173

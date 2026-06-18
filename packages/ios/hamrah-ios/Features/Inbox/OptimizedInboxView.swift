@@ -19,6 +19,8 @@ struct OptimizedInboxView: View {
 
 private struct InnerOptimizedInboxView: View {
     let modelContext: ModelContext
+    @EnvironmentObject private var authManager: NativeAuthManager
+    @EnvironmentObject private var biometricManager: BiometricAuthManager
     @StateObject private var viewModel: InboxViewModel
     @Query private var links: [LinkEntity]
 
@@ -231,7 +233,15 @@ private struct InnerOptimizedInboxView: View {
                 Button {
                     showingFilterSheet = true
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    Label("Filters", systemImage: "slider.horizontal.3")
+                }
+
+                NavigationLink {
+                    SettingsView()
+                        .environmentObject(authManager)
+                        .environmentObject(biometricManager)
+                } label: {
+                    Label("Account", systemImage: "person.crop.circle")
                 }
             }
         #elseif os(macOS)
@@ -249,7 +259,15 @@ private struct InnerOptimizedInboxView: View {
                 Button {
                     showingFilterSheet = true
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    Label("Filters", systemImage: "slider.horizontal.3")
+                }
+
+                NavigationLink {
+                    SettingsView()
+                        .environmentObject(authManager)
+                        .environmentObject(biometricManager)
+                } label: {
+                    Label("Account", systemImage: "person.crop.circle")
                 }
             }
         #endif
@@ -281,7 +299,9 @@ private struct InnerOptimizedInboxView: View {
         ) { notification in
             if let localId = (notification.object as? LinkEntity)?.localId {
                 Task { @MainActor in
-                    viewModel.retrySync(localId: localId)
+                    if let link = link(with: localId) {
+                        viewModel.retrySync(for: link)
+                    }
                 }
             }
         }
@@ -293,10 +313,22 @@ private struct InnerOptimizedInboxView: View {
         ) { notification in
             if let localId = (notification.object as? LinkEntity)?.localId {
                 Task { @MainActor in
-                    viewModel.deleteLink(localId: localId)
+                    if let link = link(with: localId) {
+                        viewModel.deleteLink(link)
+                    }
                 }
             }
         }
+    }
+
+    private func link(with localId: UUID) -> LinkEntity? {
+        var descriptor = FetchDescriptor<LinkEntity>(
+            predicate: #Predicate { link in
+                link.localId == localId
+            }
+        )
+        descriptor.fetchLimit = 1
+        return try? modelContext.fetch(descriptor).first
     }
 }
 
@@ -381,7 +413,9 @@ struct FilterSheet: View {
 // MARK: - Preview
 
 #Preview {
+    let previewContainer = AppModelSchema.makeInMemoryContainer()
+
     OptimizedInboxView()
-        .modelContainer(AppModelSchema.makeInMemoryContainer())
-        .environmentObject(SyncEngine(modelContainer: AppModelSchema.makeInMemoryContainer()))
+        .modelContainer(previewContainer)
+        .environmentObject(SyncEngine(api: PreviewLinkAPI(), modelContainer: previewContainer))
 }

@@ -3,6 +3,7 @@ packages:
   - 'packages/shared'
 
 overrides:
+  "@builder.io/qwik-city>undici": 8.5.0
   esbuild: 0.28.1
   "undici@>=7.0.0 <7.28.0": 7.28.0
   "undici@>=8.0.0 <8.5.0": 8.5.0
