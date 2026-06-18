@@ -29,4 +29,5 @@ struct RootView: View {
 
 #Preview {
     RootView()
+        .environmentObject(SyncEngine(modelContainer: AppModelSchema.makeInMemoryContainer()))
 }

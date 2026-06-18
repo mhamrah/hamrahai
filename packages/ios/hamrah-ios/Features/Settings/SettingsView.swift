@@ -13,6 +13,7 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var authManager: NativeAuthManager
     @EnvironmentObject var biometricManager: BiometricAuthManager
+    @EnvironmentObject var syncEngine: SyncEngine
 
     // Backing store (SwiftData) for a single UserPrefs instance
     @Query private var prefsQuery: [UserPrefs]
@@ -413,7 +414,7 @@ struct SettingsView: View {
     private var syncEngineSection: some View {
         Section("Sync Engine") {
             Button {
-                Task { await SyncEngine().runSyncNow(reason: "settings_manual_sync") }
+                Task { await syncEngine.runSyncNow(reason: "settings_manual_sync") }
             } label: {
                 Label("Run Sync Now", systemImage: "arrow.clockwise")
             }
@@ -851,6 +852,7 @@ enum SettingsAPIPrompt {
             }
             .environmentObject(NativeAuthManager())
             .environmentObject(BiometricAuthManager())
+            .environmentObject(SyncEngine(modelContainer: AppModelSchema.makeInMemoryContainer()))
         }
     }
 #endif

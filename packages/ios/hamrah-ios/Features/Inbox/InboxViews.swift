@@ -11,6 +11,7 @@ import WebKit
 struct InboxView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
+    @EnvironmentObject private var syncEngine: SyncEngine
     @EnvironmentObject var authManager: NativeAuthManager
     @EnvironmentObject var biometricManager: BiometricAuthManager
     @State private var searchText: String = ""
@@ -105,7 +106,7 @@ struct InboxView: View {
     private func runSync() async {
         syncing = true
         defer { syncing = false }
-        await SyncEngine().runSyncNow(reason: "inbox_pull_to_refresh")
+        await syncEngine.runSyncNow(reason: "inbox_pull_to_refresh")
         // Re-evaluate query after sync
         // Instead of assigning to _links, which is immutable, trigger a state change
         // by updating a dummy state variable or by toggling a boolean
@@ -384,6 +385,7 @@ struct InboxToolbarModifier: ViewModifier {
         static var previews: some View {
             InboxView()
                 .modelContainer(previewContainer)
+                .environmentObject(SyncEngine(modelContainer: previewContainer))
         }
 
         static var previewContainer: ModelContainer = {

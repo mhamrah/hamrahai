@@ -15,6 +15,7 @@ final class SyncEngine: ObservableObject {
 
     private let api: LinkAPI
     private let modelContainer: ModelContainer
+    private let accessTokenProvider: () -> String?
 
     private let logger = Logger(subsystem: "app.hamrah.ios", category: "SyncEngine")
 
@@ -42,10 +43,24 @@ final class SyncEngine: ObservableObject {
         )
     }
 
+    convenience init(modelContainer: ModelContainer) {
+        self.init(
+            api: SecureAPILinkClient(),
+            modelContainer: modelContainer
+        )
+    }
+
     /// Designated initializer supporting dependency injection for testing.
-    init(api: LinkAPI, modelContainer: ModelContainer) {
+    init(
+        api: LinkAPI,
+        modelContainer: ModelContainer,
+        accessTokenProvider: @escaping () -> String? = {
+            KeychainManager.shared.retrieveString(for: "hamrah_access_token")
+        }
+    ) {
         self.api = api
         self.modelContainer = modelContainer
+        self.accessTokenProvider = accessTokenProvider
 
         setupPathMonitor()
     }
@@ -58,8 +73,7 @@ final class SyncEngine: ObservableObject {
 
     /// Call on app launch, foreground, or pull-to-refresh.
     func triggerSync(reason: String = "manual") {
-        syncQueue.async { [weak self] in
-            guard let self else { return }
+        syncQueue.async {
             Task { await self.performSync(reason: reason) }
         }
     }
@@ -96,6 +110,11 @@ final class SyncEngine: ObservableObject {
         guard !isSyncing else { return }
         isSyncing = true
         defer { isSyncing = false }
+
+        guard accessToken() != nil else {
+            logger.info("Skipping sync; no access token available. reason=\(reason, privacy: .public)")
+            return
+        }
 
         let context = modelContainer.mainContext
         logger.info("Starting sync; reason=\(reason, privacy: .public)")
@@ -142,7 +161,7 @@ final class SyncEngine: ObservableObject {
     }
 
     private func accessToken() -> String? {
-        KeychainManager.shared.retrieveString(for: "hamrah_access_token")
+        accessTokenProvider()
     }
 
     private func currentPrefs(_ context: ModelContext) -> UserPrefs? {

@@ -19,12 +19,12 @@ final class DeepLinkRouter {
     /// - Parameter url: The URL received by the application.
     /// - Returns: true if the link was recognized and handled; false otherwise.
     @discardableResult
-    static func handle(_ url: URL) -> Bool {
+    static func handle(_ url: URL, sync: ((String) -> Void)? = nil) -> Bool {
         guard let deepLink = parseDeepLink(from: url) else {
             logger.debug("Unrecognized deep link: \(url.absoluteString, privacy: .public)")
             return false
         }
-        return handle(deepLink)
+        return handle(deepLink, sync: sync)
     }
 
     /// Parses a URL into a DeepLink enum if recognized.
@@ -61,13 +61,17 @@ final class DeepLinkRouter {
     }
 
     /// Routes the parsed deep link into the appropriate feature.
-    private static func handle(_ deepLink: DeepLink) -> Bool {
+    private static func handle(_ deepLink: DeepLink, sync: ((String) -> Void)? = nil) -> Bool {
         switch deepLink {
         case .sync(let reason):
             // Fire-and-forget sync trigger; SyncEngine manages its own queue.
             let r = reason ?? "deeplink"
             logger.info("Handling deep link: sync; reason=\(r, privacy: .public)")
-            SyncEngine().triggerSync(reason: r)
+            if let sync {
+                sync(r)
+            } else {
+                SyncEngine().triggerSync(reason: r)
+            }
             return true
         }
     }
