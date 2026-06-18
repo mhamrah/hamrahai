@@ -9,6 +9,7 @@ final class SyncEngineTests: XCTestCase {
 
     final class MockAPI: LinkAPI {
         var capturedPostPayloads: [OutboundLinkPayload] = []
+        var getLinksCallCount = 0
         var nextPostResult: Result<PostLinkResponse, Error> = .success(
             PostLinkResponse(serverId: "srv-1", canonicalUrl: "https://example.com/canon")
         )
@@ -27,6 +28,7 @@ final class SyncEngineTests: XCTestCase {
         }
 
         func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse {
+            getLinksCallCount += 1
             return try nextDeltaResult.get()
         }
     }
@@ -83,7 +85,11 @@ final class SyncEngineTests: XCTestCase {
             PostLinkResponse(serverId: "server-123", canonicalUrl: "https://example.com/canonical")
         )
 
-        let engine = SyncEngine(api: api, modelContainer: container)
+        let engine = SyncEngine(
+            api: api,
+            modelContainer: container,
+            accessTokenProvider: { "test-token" }
+        )
 
         await engine._testRunSyncNow(reason: "test")
 
@@ -98,6 +104,38 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(api.capturedPostPayloads.count, 1)
         let payload = try XCTUnwrap(api.capturedPostPayloads.first)
         XCTAssertEqual(payload.originalUrl, "https://example.com/path")
+    }
+
+    func testSyncWithoutAccessTokenSkipsNetworkAndKeepsQueuedLinksUntouched() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let url = URL(string: "https://example.com/queued")!
+        let link = LinkEntity(
+            originalUrl: url,
+            canonicalUrl: url,
+            sharedAt: Date(),
+            status: "queued",
+            updatedAt: Date(),
+            createdAt: Date()
+        )
+        context.insert(link)
+        try context.save()
+
+        let api = MockAPI()
+        let engine = SyncEngine(
+            api: api,
+            modelContainer: container,
+            accessTokenProvider: { nil }
+        )
+
+        await engine._testRunSyncNow(reason: "test_no_token")
+
+        let saved = try XCTUnwrap(fetchAllLinks(context).first)
+        XCTAssertEqual(saved.status, "queued")
+        XCTAssertEqual(saved.attempts, 0)
+        XCTAssertNil(saved.lastError)
+        XCTAssertTrue(api.capturedPostPayloads.isEmpty)
+        XCTAssertEqual(api.getLinksCallCount, 0)
     }
 
     func testOutboundSync_failureIncrementsAttemptsAndLeavesQueued() async throws {
@@ -122,7 +160,10 @@ final class SyncEngineTests: XCTestCase {
         api.nextPostResult = .failure(TestError.network)
 
         let engine = SyncEngine(
-            api: api, modelContainer: container)
+            api: api,
+            modelContainer: container,
+            accessTokenProvider: { "test-token" }
+        )
 
         await engine._testRunSyncNow(reason: "test")
 
@@ -160,7 +201,10 @@ final class SyncEngineTests: XCTestCase {
         api.nextDeltaResult = .success(DeltaResponse(links: [serverLink], nextCursor: "cursor-2"))
 
         let engine = SyncEngine(
-            api: api, modelContainer: container)
+            api: api,
+            modelContainer: container,
+            accessTokenProvider: { "test-token" }
+        )
 
         await engine._testRunSyncNow(reason: "test")
 
@@ -225,7 +269,10 @@ final class SyncEngineTests: XCTestCase {
         api.nextDeltaResult = .success(DeltaResponse(links: [s], nextCursor: nil))
 
         let engine = SyncEngine(
-            api: api, modelContainer: container)
+            api: api,
+            modelContainer: container,
+            accessTokenProvider: { "test-token" }
+        )
         await engine._testRunSyncNow(reason: "test")
 
         // Assert merged

@@ -12,6 +12,7 @@ import SwiftUI
 struct ProgressiveAuthView: View {
     @EnvironmentObject private var authManager: NativeAuthManager
     @EnvironmentObject private var biometricManager: BiometricAuthManager
+    @EnvironmentObject private var syncEngine: SyncEngine
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var biometricAuthPending = false
@@ -133,6 +134,7 @@ struct ProgressiveAuthView: View {
         } else {
             print("✅ Authentication complete - no biometric required")
             initializeAppAttestation()
+            triggerAuthenticatedSync(reason: "auth_complete")
         }
 
         await MainActor.run {
@@ -208,6 +210,7 @@ struct ProgressiveAuthView: View {
             if success {
                 print("✅ Biometric authentication successful")
                 initializeAppAttestation()
+                triggerAuthenticatedSync(reason: "biometric_auth_complete")
                 hasCheckedBiometric = true
             } else {
                 print("❌ Biometric authentication failed - logging out for security")
@@ -217,10 +220,15 @@ struct ProgressiveAuthView: View {
             }
         }
     }
+
+    private func triggerAuthenticatedSync(reason: String) {
+        syncEngine.triggerSync(reason: reason)
+    }
 }
 
 #Preview {
     ProgressiveAuthView()
         .environmentObject(NativeAuthManager())
         .environmentObject(BiometricAuthManager())
+        .environmentObject(SyncEngine(modelContainer: AppModelSchema.makeInMemoryContainer()))
 }

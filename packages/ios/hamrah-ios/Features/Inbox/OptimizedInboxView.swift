@@ -10,9 +10,10 @@ import SwiftUI
 
 struct OptimizedInboxView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var syncEngine: SyncEngine
 
     var body: some View {
-        InnerOptimizedInboxView(modelContext: modelContext)
+        InnerOptimizedInboxView(modelContext: modelContext, syncEngine: syncEngine)
     }
 }
 
@@ -24,9 +25,11 @@ private struct InnerOptimizedInboxView: View {
     @State private var showingFilterSheet = false
     @State private var selectedLink: LinkEntity?
 
-    init(modelContext: ModelContext) {
+    init(modelContext: ModelContext, syncEngine: SyncEngine) {
         self.modelContext = modelContext
-        self._viewModel = StateObject(wrappedValue: InboxViewModel(modelContext: modelContext))
+        self._viewModel = StateObject(
+            wrappedValue: InboxViewModel(syncEngine: syncEngine, modelContext: modelContext)
+        )
         self._links = Query(LinkQueryDescriptors.recent())
     }
 
@@ -276,9 +279,9 @@ private struct InnerOptimizedInboxView: View {
             object: nil,
             queue: .main
         ) { notification in
-            if let link = notification.object as? LinkEntity {
+            if let localId = (notification.object as? LinkEntity)?.localId {
                 Task { @MainActor in
-                    viewModel.retrySync(for: link)
+                    viewModel.retrySync(localId: localId)
                 }
             }
         }
@@ -288,9 +291,9 @@ private struct InnerOptimizedInboxView: View {
             object: nil,
             queue: .main
         ) { notification in
-            if let link = notification.object as? LinkEntity {
+            if let localId = (notification.object as? LinkEntity)?.localId {
                 Task { @MainActor in
-                    viewModel.deleteLink(link)
+                    viewModel.deleteLink(localId: localId)
                 }
             }
         }
@@ -379,4 +382,6 @@ struct FilterSheet: View {
 
 #Preview {
     OptimizedInboxView()
+        .modelContainer(AppModelSchema.makeInMemoryContainer())
+        .environmentObject(SyncEngine(modelContainer: AppModelSchema.makeInMemoryContainer()))
 }

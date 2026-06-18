@@ -54,8 +54,8 @@ final class InboxViewModel: BaseViewModel {
 
     // MARK: - Initialization
 
-    init(syncEngine: SyncEngine = SyncEngine(), modelContext: ModelContext) {
-        self.syncEngine = syncEngine
+    init(syncEngine: SyncEngine? = nil, modelContext: ModelContext) {
+        self.syncEngine = syncEngine ?? SyncEngine()
         self.modelContext = modelContext
         super.init()
         setupSearchDebouncing()
@@ -93,6 +93,11 @@ final class InboxViewModel: BaseViewModel {
         }
     }
 
+    func deleteLink(localId: UUID) {
+        guard let link = link(withLocalId: localId) else { return }
+        deleteLink(link)
+    }
+
     func retrySync(for link: LinkEntity) {
         link.status = "queued"
         link.attempts = 0
@@ -105,6 +110,11 @@ final class InboxViewModel: BaseViewModel {
         } catch {
             handleError(error)
         }
+    }
+
+    func retrySync(localId: UUID) {
+        guard let link = link(withLocalId: localId) else { return }
+        retrySync(for: link)
     }
 
     func clearAllFilters() {
@@ -122,6 +132,12 @@ final class InboxViewModel: BaseViewModel {
         } else {
             selectedTags.append(tagName)
         }
+    }
+
+    private func link(withLocalId localId: UUID) -> LinkEntity? {
+        try? modelContext.fetch(
+            FetchDescriptor<LinkEntity>(predicate: #Predicate { $0.localId == localId })
+        ).first
     }
 
     // MARK: - Private Methods

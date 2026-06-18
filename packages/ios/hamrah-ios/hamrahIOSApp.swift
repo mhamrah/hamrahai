@@ -20,74 +20,92 @@ import SwiftUI
 @main
 struct hamrahIOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    var sharedModelContainer: ModelContainer = {
-        #if DEBUG
-            AppModelSchema.makeSharedContainerWithRecovery()
-        #else
-            (try? AppModelSchema.makeSharedContainer()) ?? AppModelSchema.makeInMemoryContainer()
-        #endif
-    }()
+    private let sharedModelContainer: ModelContainer
+    @StateObject private var syncEngine: SyncEngine
 
     // Background sync registration - iOS only
     init() {
+        let modelContainer = Self.makeModelContainer()
+        self.sharedModelContainer = modelContainer
+        let syncEngine = SyncEngine(modelContainer: modelContainer)
+        self._syncEngine = StateObject(wrappedValue: syncEngine)
+
         #if os(iOS)
             #if !targetEnvironment(simulator)
-                BGTaskScheduler.shared.register(
-                    forTaskWithIdentifier: "app.hamrah.ios.sync", using: nil
-                ) {
-                    task in
-                    Task {
-                        SyncEngine().triggerBackgroundSync()
-                        task.setTaskCompleted(success: true)
-                    }
-                }
+                Self.registerBackgroundSync(using: syncEngine)
                 print("🗓️ Scheduling background sync task on device...")
-                scheduleBackgroundSync()
+                Self.scheduleBackgroundSync()
             #else
                 print("ℹ️ Skipping BGTask registration on Simulator.")
             #endif
         #endif
     }
 
+    private static func makeModelContainer() -> ModelContainer {
+        #if DEBUG
+            AppModelSchema.makeSharedContainerWithRecovery()
+        #else
+            (try? AppModelSchema.makeSharedContainer()) ?? AppModelSchema.makeInMemoryContainer()
+        #endif
+    }
+
     #if os(iOS)
-        private func scheduleBackgroundSync() {
+        private static func registerBackgroundSync(using syncEngine: SyncEngine) {
+            BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: "app.hamrah.ios.sync", using: nil
+            ) { task in
+                Task {
+                    await syncEngine.runSyncNow(reason: "background")
+                    task.setTaskCompleted(success: true)
+                    Self.scheduleBackgroundSync()
+                }
+            }
+        }
+
+        private static func scheduleBackgroundSync() {
             #if targetEnvironment(simulator)
                 print("ℹ️ Skipping BGProcessingTask scheduling on Simulator.")
-                return
+            #else
+                print("📝 Preparing BGProcessingTask request for 'app.hamrah.ios.sync'")
+                let request = BGProcessingTaskRequest(identifier: "app.hamrah.ios.sync")
+                request.requiresNetworkConnectivity = true
+                request.requiresExternalPower = false
+                do {
+                    try BGTaskScheduler.shared.submit(request)
+                } catch {
+                    print("Failed to submit BGProcessingTask: \(error)")
+                }
             #endif
-            print("📝 Preparing BGProcessingTask request for 'app.hamrah.ios.sync'")
-            let request = BGProcessingTaskRequest(identifier: "app.hamrah.ios.sync")
-            request.requiresNetworkConnectivity = true
-            request.requiresExternalPower = false
-            do {
-                try BGTaskScheduler.shared.submit(request)
-            } catch {
-                print("Failed to submit BGProcessingTask: \(error)")
-            }
         }
     #endif
 
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environmentObject(syncEngine)
                 .task {
                     print(
                         "🌐 API baseURL: \(APIConfiguration.shared.baseURL) [env=\(APIConfiguration.shared.currentEnvironment.rawValue)]"
                     )
+                    syncEngine.triggerSync(reason: "app_launch")
                 }
                 .onOpenURL { url in
                     // Handle deep link URLs (OAuth callback)
                     print("Received URL: \(url)")
                     // Google Sign-In URL handling not required here for modern SDK; proceed to deep link router.
-                    let routed = DeepLinkRouter.handle(url)
+                    let routed = DeepLinkRouter.handle(url) { reason in
+                        syncEngine.triggerSync(reason: reason)
+                    }
                     print("🔗 DeepLinkRouter handled: \(routed)")
-                    SyncEngine().triggerSync(reason: "open_url")
+                    if !routed {
+                        syncEngine.triggerSync(reason: "open_url")
+                    }
                 }
         }
         .modelContainer(sharedModelContainer)
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                SyncEngine().triggerSync(reason: "app_active")
+                syncEngine.triggerSync(reason: "app_active")
             }
         }
     }
