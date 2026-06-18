@@ -198,14 +198,14 @@ type RegisterBeginResponse = {
 
 **Deployment:**
 - Domain: `https://hamrah.app`
-- Configuration: `wrangler.jsonc`
+- Configuration: `wrangler.toml`
 - Environment: Cloudflare Workers (edge runtime)
 
 ### File Structure
 ```
 packages/web/
 ├── package.json         # Dependencies and scripts
-├── wrangler.jsonc       # Cloudflare Workers config
+├── wrangler.toml        # Cloudflare Workers config
 ├── vite.config.ts       # Build configuration
 ├── src/
 │   ├── routes/         # Page routes
@@ -452,7 +452,7 @@ Response: {
 3. Deploy to Cloudflare Workers via wrangler
 4. Live at `https://hamrah.app`
 
-**Configuration:** `packages/web/wrangler.jsonc`
+**Configuration:** `packages/web/wrangler.toml`
 
 ### iOS Deployment (App Store)
 
