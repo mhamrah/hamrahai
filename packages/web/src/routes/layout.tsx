@@ -4,14 +4,18 @@ import type { RequestHandler } from "@builder.io/qwik-city";
 import { getCurrentUser } from "~/lib/auth/utils";
 import { deleteSessionTokenCookie } from "~/lib/auth/session";
 
+function isPublicPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/auth/") ||
+    pathname.startsWith("/oidc/") ||
+    pathname.startsWith("/api/") ||
+    pathname.startsWith("/.well-known/")
+  );
+}
+
 export const onRequest: RequestHandler = async (event) => {
   // Skip auth check for auth routes, OIDC routes, API routes, and public routes
-  if (
-    event.url.pathname.startsWith("/auth/") ||
-    event.url.pathname.startsWith("/oidc/") ||
-    event.url.pathname.startsWith("/api/") ||
-    event.url.pathname.startsWith("/.well-known/")
-  ) {
+  if (isPublicPath(event.url.pathname)) {
     return;
   }
 
@@ -53,7 +57,11 @@ export const useServerTimeLoader = routeLoader$(() => {
 });
 
 export const useUserLoader = routeLoader$(async (event) => {
-  return event.sharedMap.get("user") || null;
+  const user = event.sharedMap.get("user");
+  if (!user && !isPublicPath(event.url.pathname)) {
+    throw event.redirect(302, "/auth/login");
+  }
+  return user || null;
 });
 
 export default component$(() => {

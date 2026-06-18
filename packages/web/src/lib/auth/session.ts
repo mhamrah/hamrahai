@@ -1,6 +1,9 @@
 import { sha256 } from "@oslojs/crypto/sha2";
-import { encodeBase32LowerCaseNoPadding, encodeHexLowerCase } from "@oslojs/encoding";
-import type { RequestEventCommon } from '@builder.io/qwik-city';
+import {
+  encodeBase32LowerCaseNoPadding,
+  encodeHexLowerCase,
+} from "@oslojs/encoding";
+import type { RequestEventCommon } from "@builder.io/qwik-city";
 import { createApiClient } from "./api-client";
 
 export function generateSessionToken(): string {
@@ -14,39 +17,57 @@ export function createSessionId(token: string): string {
   return encodeHexLowerCase(sha256(new TextEncoder().encode(token)));
 }
 
-export async function createSession(event: RequestEventCommon, token: string, userId: string) {
+export async function createSession(
+  event: RequestEventCommon,
+  token: string,
+  userId: string,
+) {
   // Session creation is now handled by /api/auth/native endpoint
   // This function is deprecated - use /api/auth/native for OAuth flows
-  throw new Error("createSession has been moved to hamrah-api - use /api/auth/native endpoint");
+  throw new Error(
+    "createSession has been moved to hamrah-api - use /api/auth/native endpoint",
+  );
 }
 
-export async function validateSessionToken(event: RequestEventCommon, token: string): Promise<SessionValidationResult> {
+export async function validateSessionToken(
+  event: RequestEventCommon,
+  token: string,
+): Promise<SessionValidationResult> {
   try {
     // Session validation via public cookie-based endpoint
     const apiClient = createApiClient(event);
     const result = await apiClient.validateSession();
+    const isValid = result.success && !!result.user;
 
     // Convert ApiAuthResponse to SessionValidationResult
     return {
-      success: result.success,
-      is_valid: result.success,
-      user: result.user,
-      session: token ? { token, expires_at: new Date() } : null,
+      success: isValid,
+      is_valid: isValid,
+      user: result.user ?? null,
+      session: isValid && token ? { token, expires_at: new Date() } : null,
+      error: isValid ? undefined : result.error || "Session validation failed",
     };
   } catch (error) {
-    console.warn('Session validation failed:', error instanceof Error ? error.message : 'Unknown error');
+    console.warn(
+      "Session validation failed:",
+      error instanceof Error ? error.message : "Unknown error",
+    );
     // Return failed validation instead of throwing error
     return {
       success: false,
       is_valid: false,
       user: null,
       session: null,
-      error: 'Session validation failed',
+      error: "Session validation failed",
     };
   }
 }
 
-export function setSessionTokenCookie(event: RequestEventCommon, token: string, expires_at: Date): void {
+export function setSessionTokenCookie(
+  event: RequestEventCommon,
+  token: string,
+  expires_at: Date,
+): void {
   const isLocalhost =
     event.url.hostname === "localhost" || event.url.hostname === "127.0.0.1";
   const secure = event.url.protocol === "https:" || !isLocalhost;
@@ -78,14 +99,19 @@ export function setSessionTokenCookie(event: RequestEventCommon, token: string, 
 export function deleteSessionTokenCookie(event: RequestEventCommon): void {
   event.cookie.delete("session", { path: "/" });
   event.cookie.delete("csrf_token", { path: "/" });
-  if (event.url.hostname !== "localhost" && event.url.hostname !== "127.0.0.1") {
+  if (
+    event.url.hostname !== "localhost" &&
+    event.url.hostname !== "127.0.0.1"
+  ) {
     event.cookie.delete("session", { path: "/", domain: ".hamrah.app" });
     event.cookie.delete("csrf_token", { path: "/", domain: ".hamrah.app" });
   }
 }
 
 // Cookie-based session validation (for use in routes that need Cookie access)
-export async function validateSession(cookie: any): Promise<SessionValidationResult> {
+export async function validateSession(
+  cookie: any,
+): Promise<SessionValidationResult> {
   const session_token = cookie.get("session")?.value;
   if (!session_token) {
     return {
