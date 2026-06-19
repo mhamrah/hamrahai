@@ -2,6 +2,7 @@ import type { RequestHandler } from "@builder.io/qwik-city";
 import { getGoogleProvider } from "~/lib/auth/providers";
 import { setSessionTokenCookie } from "~/lib/auth/session";
 import { createApiClient } from "~/lib/auth/api-client";
+import { safeRedirectPath } from "~/lib/auth/redirects";
 
 export const onGet: RequestHandler = async (event) => {
   const url = new URL(event.request.url);
@@ -27,6 +28,9 @@ export const onGet: RequestHandler = async (event) => {
 
   // Production OAuth flow
   const storedState = event.cookie.get("google_oauth_state")?.value ?? null;
+  const redirect = safeRedirectPath(
+    event.cookie.get("google_oauth_redirect")?.value,
+  );
   const codeVerifier =
     event.cookie.get("google_oauth_code_verifier")?.value ?? null;
 
@@ -104,6 +108,7 @@ export const onGet: RequestHandler = async (event) => {
   // Clear OAuth cookies
   event.cookie.delete("google_oauth_state");
   event.cookie.delete("google_oauth_code_verifier");
+  event.cookie.delete("google_oauth_redirect");
 
-  throw event.redirect(302, "/");
+  throw event.redirect(302, redirect);
 };

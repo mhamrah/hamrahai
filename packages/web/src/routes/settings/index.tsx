@@ -10,7 +10,10 @@ export default component$(() => {
     <div class="min-h-screen">
       <header class="border-b border-gray-200 bg-white/90 backdrop-blur">
         <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
-          <a href="/" class="text-lg font-semibold tracking-tight text-gray-950">
+          <a
+            href="/"
+            class="text-lg font-semibold tracking-tight text-gray-950"
+          >
             Hamrah
           </a>
           <nav class="flex items-center gap-2">
@@ -31,7 +34,7 @@ export default component$(() => {
             Settings
           </h1>
           <p class="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
-            Manage your profile, connected provider, and passkeys.
+            Manage your profile, connected sign-in methods, and passkeys.
           </p>
         </div>
 
@@ -71,20 +74,28 @@ export default component$(() => {
 
           <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
             <div>
-              <h2 class="text-xl font-semibold text-gray-950">
-                Security
-              </h2>
+              <h2 class="text-xl font-semibold text-gray-950">Security</h2>
               <p class="mt-2 text-sm leading-6 text-gray-600">
                 Add passkeys for passwordless access and review connected
                 sign-in methods.
               </p>
             </div>
 
-            <div class="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-              <div class="flex items-center">
-                {user.value.provider === "google" ? (
-                  <>
-                    <svg class="mr-2 h-5 w-5" viewBox="0 0 24 24">
+            <div class="mt-6 space-y-3">
+              <h3 class="text-sm font-semibold text-gray-950">
+                Connected sign-in methods
+              </h3>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div
+                  class={[
+                    "flex items-center justify-between rounded-lg border p-4",
+                    user.value.provider === "google"
+                      ? "border-emerald-200 bg-emerald-50"
+                      : "border-gray-200 bg-white",
+                  ].join(" ")}
+                >
+                  <div class="flex min-w-0 items-center">
+                    <svg class="mr-3 h-5 w-5 shrink-0" viewBox="0 0 24 24">
                       <path
                         fill="#4285F4"
                         d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -102,28 +113,60 @@ export default component$(() => {
                         d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                       />
                     </svg>
-                    <span class="text-sm font-medium text-green-800">
-                      Connected with Google
-                    </span>
-                  </>
-                ) : user.value.provider === "apple" ? (
-                  <>
+                    <div>
+                      <p class="text-sm font-medium text-gray-950">Google</p>
+                      {user.value.provider === "google" && (
+                        <p class="text-xs text-emerald-700">Connected</p>
+                      )}
+                    </div>
+                  </div>
+                  {user.value.provider !== "google" && (
+                    <a
+                      href="/auth/google?redirect=%2Fsettings"
+                      class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
+                    >
+                      Connect
+                    </a>
+                  )}
+                </div>
+
+                <div
+                  class={[
+                    "flex items-center justify-between rounded-lg border p-4",
+                    user.value.provider === "apple"
+                      ? "border-emerald-200 bg-emerald-50"
+                      : "border-gray-200 bg-white",
+                  ].join(" ")}
+                >
+                  <div class="flex min-w-0 items-center">
                     <svg
-                      class="mr-2 h-5 w-5 text-green-600"
+                      class={[
+                        "mr-3 h-5 w-5 shrink-0",
+                        user.value.provider === "apple"
+                          ? "text-emerald-700"
+                          : "text-gray-800",
+                      ].join(" ")}
                       fill="currentColor"
                       viewBox="0 0 24 24"
                     >
                       <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
                     </svg>
-                    <span class="text-sm font-medium text-green-800">
-                      Connected with Apple
-                    </span>
-                  </>
-                ) : (
-                  <span class="text-sm font-medium text-green-800">
-                    Passkey-ready account
-                  </span>
-                )}
+                    <div>
+                      <p class="text-sm font-medium text-gray-950">Apple</p>
+                      {user.value.provider === "apple" && (
+                        <p class="text-xs text-emerald-700">Connected</p>
+                      )}
+                    </div>
+                  </div>
+                  {user.value.provider !== "apple" && (
+                    <a
+                      href="/auth/apple?redirect=%2Fsettings"
+                      class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
+                    >
+                      Connect
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
 
