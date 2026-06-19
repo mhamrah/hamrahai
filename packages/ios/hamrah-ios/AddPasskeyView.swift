@@ -102,7 +102,7 @@ struct AddPasskeyView: View {
     private func addPasskey() {
         // Debug authentication state
         print("🔍 Authentication Debug:")
-        print("  Current User: \(authManager.currentUser?.email ?? "nil")")
+        print("  Current User present: \(authManager.currentUser != nil)")
         print("  Access Token: \(authManager.accessToken != nil ? "present" : "nil")")
         print("  Is Authenticated: \(authManager.isAuthenticated)")
 

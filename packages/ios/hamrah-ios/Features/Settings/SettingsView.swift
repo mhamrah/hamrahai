@@ -644,7 +644,7 @@ struct SettingsView: View {
     private func loadPasskeys(showAlertOnFailure: Bool = false) {
         // Debug authentication state
         print("🔍 MyAccountView Authentication Debug:")
-        print("  Current User: \(authManager.currentUser?.email ?? "nil")")
+        print("  Current User present: \(authManager.currentUser != nil)")
         print("  Access Token: \(authManager.accessToken != nil ? "present" : "nil")")
         print("  Is Authenticated: \(authManager.isAuthenticated)")
 

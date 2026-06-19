@@ -1,4 +1,5 @@
 import { component$, useSignal, $, type QRL } from "@builder.io/qwik";
+import { getSafeRedirectPath } from "~/lib/auth/redirect";
 import { authenticateWithDiscoverablePasskey } from "~/lib/auth/webauthn";
 
 interface UnifiedAuthProps {
@@ -27,7 +28,7 @@ export const UnifiedAuth = component$<UnifiedAuthProps>((props) => {
   const passkeySuccessCount = useSignal(0);
   const passkeyFailureCount = useSignal(0);
 
-  const redirectUrl = props.redirectUrl;
+  const redirectUrl = getSafeRedirectPath(props.redirectUrl);
 
   const handleExplicitPasskeyAuth = $(async () => {
     if (isLoading.value) return;
@@ -59,10 +60,9 @@ export const UnifiedAuth = component$<UnifiedAuthProps>((props) => {
 
         success.value = "Signed in with passkey!";
         await props.onSuccess?.(result.user);
-        const target = redirectUrl || "/";
         // Redirect shortly to allow state updates to flush
         setTimeout(() => {
-          window.location.href = target;
+          window.location.href = redirectUrl;
         }, 10);
       } else {
         passkeyFailureCount.value++;
@@ -111,24 +111,28 @@ export const UnifiedAuth = component$<UnifiedAuthProps>((props) => {
     if (isLoading.value) return;
     isLoading.value = true;
     error.value = "";
-    window.location.href = redirectUrl
-      ? `/auth/google?redirect=${encodeURIComponent(redirectUrl)}`
-      : "/auth/google";
+    window.location.href =
+      redirectUrl === "/"
+        ? "/auth/google"
+        : `/auth/google?redirect=${encodeURIComponent(redirectUrl)}`;
   });
 
   const handleAppleAuth = $(() => {
     if (isLoading.value) return;
     isLoading.value = true;
     error.value = "";
-    window.location.href = redirectUrl
-      ? `/auth/apple?redirect=${encodeURIComponent(redirectUrl)}`
-      : "/auth/apple";
+    window.location.href =
+      redirectUrl === "/"
+        ? "/auth/apple"
+        : `/auth/apple?redirect=${encodeURIComponent(redirectUrl)}`;
   });
 
   return (
     <div class="space-y-6">
       <div>
-        <p class="text-sm font-medium text-cambridge-blue-700">Secure sign in</p>
+        <p class="text-sm font-medium text-cambridge-blue-700">
+          Secure sign in
+        </p>
         <h2 class="mt-2 text-3xl font-semibold tracking-tight text-gray-950">
           Welcome to Hamrah
         </h2>
@@ -246,8 +250,8 @@ export const UnifiedAuth = component$<UnifiedAuthProps>((props) => {
       </div>
 
       <div class="rounded-lg bg-gray-50 px-4 py-3 text-xs leading-5 text-gray-600">
-        Passkeys use your device biometrics or screen lock. Hamrah never sees
-        or stores your biometric data.
+        Passkeys use your device biometrics or screen lock. Hamrah never sees or
+        stores your biometric data.
       </div>
     </div>
   );
