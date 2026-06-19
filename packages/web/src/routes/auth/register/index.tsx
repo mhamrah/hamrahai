@@ -1,5 +1,10 @@
 import { component$, useSignal, $ } from "@builder.io/qwik";
-import type { DocumentHead, RequestHandler } from "@builder.io/qwik-city";
+import {
+  routeLoader$,
+  type DocumentHead,
+  type RequestHandler,
+} from "@builder.io/qwik-city";
+import { getSafeRedirectPath } from "~/lib/auth/redirect";
 
 export const onGet: RequestHandler = async ({ cacheControl }) => {
   // Prevent caching of register page to ensure users see current auth state
@@ -10,20 +15,16 @@ export const onGet: RequestHandler = async ({ cacheControl }) => {
   });
 };
 
+export const useRedirectPath = routeLoader$((event) => {
+  return getSafeRedirectPath(event.url.searchParams.get("redirect"));
+});
+
 export default component$(() => {
+  const redirectPath = useRedirectPath();
   const isLoading = useSignal(false);
   const error = useSignal<string>("");
   const email = useSignal("");
   const name = useSignal("");
-
-  // Get redirect URL from query params
-  const getRedirectUrl = $(() => {
-    if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      return url.searchParams.get("redirect") || "/";
-    }
-    return "/";
-  });
 
   const handleRegister = $(async () => {
     if (!email.value || !name.value) {
@@ -40,8 +41,7 @@ export default component$(() => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Redirect to success page or dashboard
-      const redirectUrl = await getRedirectUrl();
-      window.location.href = redirectUrl;
+      window.location.href = redirectPath.value;
     } catch (err: any) {
       let errorMessage = "Failed to register";
 

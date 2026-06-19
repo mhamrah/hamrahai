@@ -4,6 +4,7 @@ import {
   server$,
   type DocumentHead,
 } from "@builder.io/qwik-city";
+import { getSafeRedirectPath } from "~/lib/auth/redirect";
 import { getCurrentUser } from "~/lib/auth/utils";
 
 export const useUser = routeLoader$(async (event) => {
@@ -14,9 +15,15 @@ export const useUser = routeLoader$(async (event) => {
   return user;
 });
 
+export const useRedirectPath = routeLoader$((event) => {
+  return getSafeRedirectPath(event.url.searchParams.get("redirect"));
+});
+
 const updateProfile = server$(async function (email: string, name: string) {
   const { getCurrentUser } = await import("~/lib/auth/utils");
   // TODO: Replace legacy DB logic with API client calls if needed
+  void email;
+  void name;
 
   try {
     const { user } = await getCurrentUser(this as any);
@@ -28,7 +35,6 @@ const updateProfile = server$(async function (email: string, name: string) {
     // For now, return success without actual update
     console.warn(
       "Profile update not implemented - requires hamrah-api integration",
-      { email, name },
     );
 
     return { success: true };
@@ -40,6 +46,7 @@ const updateProfile = server$(async function (email: string, name: string) {
 
 export default component$(() => {
   const user = useUser();
+  const redirectPath = useRedirectPath();
   const isLoading = useSignal(false);
   const error = useSignal("");
   const email = useSignal(
@@ -64,11 +71,7 @@ export default component$(() => {
         throw new Error(result.error || "Failed to update profile");
       }
 
-      // Get redirect URL from query params
-      const url = new URL(window.location.href);
-      const redirectUrl = url.searchParams.get("redirect") || "/";
-
-      window.location.href = redirectUrl;
+      window.location.href = redirectPath.value;
     } catch (err: any) {
       error.value = err.message;
     } finally {
@@ -77,9 +80,7 @@ export default component$(() => {
   });
 
   const handleSkip = $(() => {
-    const url = new URL(window.location.href);
-    const redirectUrl = url.searchParams.get("redirect") || "/";
-    window.location.href = redirectUrl;
+    window.location.href = redirectPath.value;
   });
 
   return (
