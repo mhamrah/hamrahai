@@ -348,9 +348,7 @@ class NativeAuthManager: NSObject, ObservableObject {
                     withPresenting: presentingViewController)
                 let user = result.user
                 print("🔍 Google Sign-In result received:")
-                print("  User ID: \(user.userID ?? "nil")")
-                print("  Email: \(user.profile?.email ?? "nil")")
-                print("  Name: \(user.profile?.name ?? "nil")")
+                print("  Profile present: \(user.profile != nil)")
                 guard let idToken = user.idToken?.tokenString else {
                     throw NSError(
                         domain: "GoogleSignIn",
@@ -699,8 +697,7 @@ class NativeAuthManager: NSObject, ObservableObject {
                 await secureAPI.initializeAttestation(accessToken: token)
             }
 
-            let emailLog = self.currentUser?.email ?? "(unknown)"
-            print("✅ Backend authentication successful - Token accepted for \(emailLog)")
+            print("✅ Backend authentication successful - Token accepted")
         } else {
             print("❌ Auth Response Validation Failed:")
             print("  Success: \(authResponse.success)")
@@ -913,14 +910,26 @@ class NativeAuthManager: NSObject, ObservableObject {
     // MARK: - Last Used Email for Passkey Auto-Login
 
     func getLastUsedEmail() -> String? {
-        return UserDefaults.standard.string(forKey: "hamrah_last_email")
+        if let email = KeychainManager.shared.retrieveString(for: "hamrah_last_email") {
+            return email
+        }
+
+        if let legacyEmail = UserDefaults.standard.string(forKey: "hamrah_last_email") {
+            _ = KeychainManager.shared.store(legacyEmail, for: "hamrah_last_email")
+            UserDefaults.standard.removeObject(forKey: "hamrah_last_email")
+            return legacyEmail
+        }
+
+        return nil
     }
 
     func setLastUsedEmail(_ email: String) {
-        UserDefaults.standard.set(email, forKey: "hamrah_last_email")
+        _ = KeychainManager.shared.store(email, for: "hamrah_last_email")
+        UserDefaults.standard.removeObject(forKey: "hamrah_last_email")
     }
 
     func clearLastUsedEmail() {
+        _ = KeychainManager.shared.delete(for: "hamrah_last_email")
         UserDefaults.standard.removeObject(forKey: "hamrah_last_email")
     }
 
@@ -969,9 +978,7 @@ extension NativeAuthManager: ASAuthorizationControllerDelegate {
                     as? ASAuthorizationAppleIDCredential
                 {
                     print("🍎 Apple ID Credential received:")
-                    print("  User ID: \(appleIDCredential.user)")
-                    print("  Email: \(appleIDCredential.email ?? "nil")")
-                    print("  Full Name: \(appleIDCredential.fullName?.description ?? "nil")")
+                    print("  Profile fields available for backend authentication")
 
                     guard let identityToken = appleIDCredential.identityToken,
                         let tokenString = String(data: identityToken, encoding: .utf8)

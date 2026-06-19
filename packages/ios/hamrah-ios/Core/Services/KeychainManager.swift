@@ -117,6 +117,7 @@ class KeychainManager {
             "hamrah_is_authenticated",
             "hamrah_auth_timestamp",
             "hamrah_token_expires_at",
+            "hamrah_last_email",
         ]
 
         var allSuccess = true
