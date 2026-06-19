@@ -2,6 +2,7 @@ import { component$, $, useSignal } from "@builder.io/qwik";
 import type { DocumentHead, RequestHandler } from "@builder.io/qwik-city";
 import { routeLoader$ } from "@builder.io/qwik-city";
 import { UnifiedAuth } from "~/components/auth/unified-auth";
+import { getSafeRedirectPath } from "~/lib/auth/redirect";
 
 export const onGet: RequestHandler = async ({ cacheControl }) => {
   // Prevent caching of login page to ensure users see current auth state
@@ -32,7 +33,7 @@ export const useErrorLoader = routeLoader$(async ({ url }) => {
 
   return {
     error: errorMessage,
-    redirect: redirectParam || "/",
+    redirect: getSafeRedirectPath(redirectParam),
   };
 });
 
@@ -69,24 +70,27 @@ export default component$(() => {
       <main class="flex items-center justify-center lg:bg-white lg:px-10">
         <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white p-6 shadow-lg lg:border-0 lg:p-0 lg:shadow-none">
           <div class="mb-8 flex items-center justify-between">
-            <a href="/" class="text-lg font-semibold tracking-tight text-gray-950">
+            <a
+              href="/"
+              class="text-lg font-semibold tracking-tight text-gray-950"
+            >
               Hamrah
             </a>
-          <button
-            data-testid="login-button"
-            class="cursor-default rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600"
-            disabled
-          >
-            Sign In Required
-          </button>
+            <button
+              data-testid="login-button"
+              class="cursor-default rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600"
+              disabled
+            >
+              Sign In Required
+            </button>
+          </div>
+          <UnifiedAuth
+            onSuccess={handleAuthSuccess}
+            onError={handleAuthError}
+            redirectUrl={loaderData.value.redirect}
+            initialError={initialError.value}
+          />
         </div>
-        <UnifiedAuth
-          onSuccess={handleAuthSuccess}
-          onError={handleAuthError}
-          redirectUrl={loaderData.value.redirect}
-          initialError={initialError.value}
-        />
-      </div>
       </main>
     </div>
   );
