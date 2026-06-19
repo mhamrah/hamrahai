@@ -18,6 +18,7 @@ struct RootView: View {
     }
 }
 
+#if DEBUG
 #Preview {
     RootView()
         .environmentObject(
@@ -27,3 +28,4 @@ struct RootView: View {
             )
         )
 }
+#endif
