@@ -1,11 +1,13 @@
 import type { RequestHandler } from "@builder.io/qwik-city";
 import { generateState, generateCodeVerifier } from "arctic";
 import { getGoogleProvider } from "~/lib/auth/providers";
+import { safeRedirectPath } from "~/lib/auth/redirects";
 
 export const onGet: RequestHandler = async (event) => {
   const google = getGoogleProvider(event);
   const state = generateState();
   const codeVerifier = generateCodeVerifier();
+  const redirect = safeRedirectPath(event.url.searchParams.get("redirect"));
 
   const url = google.createAuthorizationURL(state, codeVerifier, [
     "openid",
@@ -27,6 +29,14 @@ export const onGet: RequestHandler = async (event) => {
     secure: event.url.protocol === "https:",
     httpOnly: true,
     maxAge: 60 * 10, // 10 minutes
+    sameSite: "lax",
+  });
+
+  event.cookie.set("google_oauth_redirect", redirect, {
+    path: "/",
+    secure: event.url.protocol === "https:",
+    httpOnly: true,
+    maxAge: 60 * 10,
     sameSite: "lax",
   });
 

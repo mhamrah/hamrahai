@@ -1,11 +1,13 @@
 import type { RequestHandler } from "@builder.io/qwik-city";
 import { generateState } from "arctic";
 import { getAppleProvider } from "~/lib/auth/providers";
+import { safeRedirectPath } from "~/lib/auth/redirects";
 
 export const onGet: RequestHandler = async (event) => {
   console.log("apple");
   const apple = getAppleProvider(event);
   const state = generateState();
+  const redirect = safeRedirectPath(event.url.searchParams.get("redirect"));
 
   const url = apple.createAuthorizationURL(state, ["name", "email"]);
   url.searchParams.set("response_mode", "form_post");
@@ -16,6 +18,14 @@ export const onGet: RequestHandler = async (event) => {
     secure: true, // Required for SameSite=None
     httpOnly: true,
     maxAge: 60 * 10, // 10 minutes
+    sameSite: "none",
+  });
+
+  event.cookie.set("apple_oauth_redirect", redirect, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    maxAge: 60 * 10,
     sameSite: "none",
   });
 
