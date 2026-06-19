@@ -18,7 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
+      packages: read
+      security-events: write
     defaults:
       run:
         working-directory: packages/api
@@ -53,6 +56,10 @@ jobs:
         working-directory: .
         run: echo "No API package changes detected."
 
+      - name: Build
+        if: steps.changes.outputs.should_run == 'true'
+        run: cargo build
+
       - name: Format check
         if: steps.changes.outputs.should_run == 'true'
         run: cargo fmt --check
@@ -64,3 +71,17 @@ jobs:
       - name: Run tests
         if: steps.changes.outputs.should_run == 'true'
         run: cargo test
+
+      - name: Initialize CodeQL
+        if: steps.changes.outputs.should_run == 'true'
+        uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+          build-mode: none
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        if: steps.changes.outputs.should_run == 'true'
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:rust"

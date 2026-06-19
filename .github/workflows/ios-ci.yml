@@ -18,7 +18,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
+      actions: read
       contents: read
+      packages: read
+      security-events: write
 
     env:
       PROJECT_PATH: packages/ios/hamrah-ios.xcodeproj
@@ -79,6 +82,24 @@ jobs:
             -derivedDataPath "${DERIVED_DATA_PATH}" \
             -disablePackageRepositoryCache
 
+      - name: Initialize CodeQL
+        if: steps.changes.outputs.should_run == 'true'
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build iOS app
+        if: steps.changes.outputs.should_run == 'true'
+        run: |
+          xcodebuild build \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -destination "${IOS_TEST_DESTINATION}" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: Run iOS tests
         if: steps.changes.outputs.should_run == 'true'
         run: |
@@ -98,3 +119,9 @@ jobs:
           path: ${{ runner.temp }}/hamrah-ios-tests.xcresult
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Perform CodeQL Analysis
+        if: steps.changes.outputs.should_run == 'true'
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:swift"
