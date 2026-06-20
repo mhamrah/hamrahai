@@ -412,6 +412,7 @@ struct FilterSheet: View {
 
 // MARK: - Preview
 
+#if DEBUG
 #Preview {
     let previewContainer = AppModelSchema.makeInMemoryContainer()
 
@@ -419,3 +420,4 @@ struct FilterSheet: View {
         .modelContainer(previewContainer)
         .environmentObject(SyncEngine(api: PreviewLinkAPI(), modelContainer: previewContainer))
 }
+#endif
