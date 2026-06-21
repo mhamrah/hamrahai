@@ -100,7 +100,7 @@ class SecureAPIService: ObservableObject {
             throw APIError.unauthorized
         }
 
-        guard httpResponse.statusCode == 200 else {
+        guard (200..<300).contains(httpResponse.statusCode) else {
             // Try to decode error message
             if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let errorMessage = errorData["error"] as? String
@@ -359,7 +359,7 @@ class SecureAPIService: ObservableObject {
             throw APIError.unauthorized
         }
 
-        guard httpResponse.statusCode == 200 else {
+        guard (200..<300).contains(httpResponse.statusCode) else {
             throw APIError.serverError(httpResponse.statusCode, "Download request failed")
         }
 

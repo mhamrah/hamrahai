@@ -24,6 +24,8 @@ pub mod attestation;
 pub mod auth;
 pub mod db;
 pub mod links;
+pub mod models;
+pub mod preferences;
 pub mod routes;
 pub mod summaries;
 pub mod tags;

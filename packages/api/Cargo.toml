@@ -11,6 +11,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 # Database
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "macros", "migrate", "uuid", "chrono"] }
 dotenvy = "0.15"
@@ -30,7 +31,6 @@ anyhow = "1"
 thiserror = "2"
 
 [dev-dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 tower = { version = "0.5", features = ["util"] }
 
 [profile.release]

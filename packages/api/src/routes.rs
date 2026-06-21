@@ -2,11 +2,13 @@ use crate::attestation;
 use crate::auth;
 use crate::db::DbPool;
 use crate::links;
+use crate::models;
+use crate::preferences;
 use crate::summaries;
 use crate::tags;
 use crate::users;
 use crate::webauthn;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::{
     Router,
     http::{
@@ -26,8 +28,10 @@ async fn auth_native_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     json: axum::Json<auth::NativeLoginRequest>,
-) -> impl IntoResponse {
-    auth::auth_native(axum::extract::State(pool), headers, json).await
+) -> Response {
+    auth::auth_native(axum::extract::State(pool), headers, json)
+        .await
+        .into_response()
 }
 
 async fn auth_refresh_wrapper(
@@ -82,38 +86,64 @@ async fn attestation_assert_wrapper(
 async fn list_links_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
+    query: axum::extract::Query<links::ListLinksQuery>,
 ) -> impl IntoResponse {
-    links::list_links(axum::extract::State(pool), headers).await
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    links::list_links_with_query(axum::extract::State(pool), headers, query)
+        .await
+        .into_response()
 }
 
 async fn create_link_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     json: axum::Json<links::CreateLinkRequest>,
-) -> impl IntoResponse {
-    links::create_link(axum::extract::State(pool), headers, json).await
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    links::create_link(axum::extract::State(pool), headers, json)
+        .await
+        .into_response()
 }
 
 async fn me_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
-    users::me(axum::extract::State(pool), headers).await
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    users::me(axum::extract::State(pool), headers)
+        .await
+        .into_response()
 }
 
 async fn list_tags_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
-    tags::list_tags(axum::extract::State(pool), headers).await
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    tags::list_tags(axum::extract::State(pool), headers)
+        .await
+        .into_response()
 }
 
 async fn latest_summary_for_link_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     path: axum::extract::Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    summaries::latest_summary_for_link(axum::extract::State(pool), headers, path).await
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    summaries::latest_summary_for_link(axum::extract::State(pool), headers, path)
+        .await
+        .into_response()
 }
 
 async fn set_tags_for_link_wrapper(
@@ -121,8 +151,34 @@ async fn set_tags_for_link_wrapper(
     headers: axum::http::HeaderMap,
     path: axum::extract::Path<uuid::Uuid>,
     json: axum::Json<tags::SetTagsRequest>,
-) -> impl IntoResponse {
-    tags::set_tags_for_link(axum::extract::State(pool), headers, path, json).await
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    tags::set_tags_for_link(axum::extract::State(pool), headers, path, json)
+        .await
+        .into_response()
+}
+
+async fn get_user_prefs_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    preferences::get_user_prefs(axum::extract::State(pool), headers).await
+}
+
+async fn update_user_prefs_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    json: axum::Json<preferences::UpdateUserPrefsRequest>,
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    preferences::update_user_prefs(axum::extract::State(pool), headers, json).await
 }
 
 pub fn create_router(pool: DbPool) -> Router {
@@ -213,6 +269,11 @@ pub fn create_router(pool: DbPool) -> Router {
             get(list_links_wrapper).post(create_link_wrapper),
         )
         .route("/v1/users/me", get(me_wrapper))
+        .route(
+            "/v1/user/prefs",
+            get(get_user_prefs_wrapper).put(update_user_prefs_wrapper),
+        )
+        .route("/v1/models", get(models::list_models))
         .route("/v1/tags", get(list_tags_wrapper))
         .route(
             "/v1/links/{id}/summary",
@@ -236,6 +297,7 @@ fn cors_layer() -> CorsLayer {
         .allow_methods([
             Method::GET,
             Method::POST,
+            Method::PUT,
             Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
@@ -244,6 +306,17 @@ fn cors_layer() -> CorsLayer {
             CONTENT_TYPE,
             AUTHORIZATION,
             HeaderName::from_static("x-csrf-token"),
+            HeaderName::from_static("x-trace-id"),
+            HeaderName::from_static("x-user-id"),
+            HeaderName::from_static("x-request-challenge"),
+            HeaderName::from_static("x-ios-development"),
+            HeaderName::from_static("x-ios-bundle-id"),
+            HeaderName::from_static("x-ios-simulator-id"),
+            HeaderName::from_static("x-ios-app-version"),
+            HeaderName::from_static("x-ios-app-attest-key"),
+            HeaderName::from_static("x-ios-app-attest-assertion"),
+            HeaderName::from_static("x-ios-app-bundle-id"),
+            HeaderName::from_static("x-app-attestation-mode"),
         ])
 }
 

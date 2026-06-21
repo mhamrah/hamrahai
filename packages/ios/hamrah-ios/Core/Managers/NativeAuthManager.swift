@@ -69,15 +69,71 @@ import SwiftUI
     }
 #endif
 
+struct GoogleSignInConfigurationValidator {
+    static let expectedClientID =
+        "66020219411-bs8v3cvpah62q616uopgk0iasebnh4jh.apps.googleusercontent.com"
+    static let expectedReversedClientID =
+        "com.googleusercontent.apps.66020219411-bs8v3cvpah62q616uopgk0iasebnh4jh"
+
+    struct Status {
+        let isAvailable: Bool
+        let clientID: String?
+        let message: String?
+    }
+
+    static func validate(bundle: Bundle = .main) -> Status {
+        validate(infoDictionary: bundle.infoDictionary ?? [:])
+    }
+
+    static func validate(infoDictionary: [String: Any]) -> Status {
+        guard let clientID = infoDictionary["GIDClientID"] as? String, !clientID.isEmpty else {
+            return Status(
+                isAvailable: false,
+                clientID: nil,
+                message: "Google Sign-In is not configured for this build.")
+        }
+
+        guard clientID.hasSuffix(".apps.googleusercontent.com") else {
+            return Status(
+                isAvailable: false,
+                clientID: clientID,
+                message: "Google Sign-In client ID is malformed.")
+        }
+
+        let schemes = ((infoDictionary["CFBundleURLTypes"] as? [[String: Any]]) ?? [])
+            .flatMap { ($0["CFBundleURLSchemes"] as? [String]) ?? [] }
+        guard schemes.contains(expectedReversedClientID) else {
+            return Status(
+                isAvailable: false,
+                clientID: clientID,
+                message: "Google Sign-In callback URL scheme is missing.")
+        }
+
+        return Status(isAvailable: true, clientID: clientID, message: nil)
+    }
+}
+
 @MainActor
 class NativeAuthManager: NSObject, ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: HamrahUser?
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published private(set) var googleSignInStatus =
+        GoogleSignInConfigurationValidator.validate()
 
     var baseURL: String {
         APIConfiguration.shared.baseURL
+    }
+
+    private var nativePlatformName: String {
+        #if os(iOS)
+            return "ios"
+        #elseif os(macOS)
+            return "macos"
+        #else
+            return "unknown"
+        #endif
     }
 
     @Published var accessToken: String?
@@ -293,32 +349,25 @@ class NativeAuthManager: NSObject, ObservableObject {
     // MARK: - Google Sign-In
 
     private func configureGoogleSignIn() {
-        // Prefer GoogleService-Info.plist, but fall back to Info.plist (GIDClientID)
-        var clientId: String? = nil
-        if let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist"),
-            let plist = NSDictionary(contentsOfFile: path),
-            let id = plist["CLIENT_ID"] as? String,
-            !id.isEmpty
-        {
-            clientId = id
-            print("✅ Google Sign-In configured from GoogleService-Info.plist")
-        } else if let id = Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String,
-            !id.isEmpty
-        {
-            clientId = id
-            print("✅ Google Sign-In configured from Info.plist GIDClientID")
-        } else {
-            print("⚠️ GoogleService-Info.plist not found and GIDClientID missing in Info.plist")
+        googleSignInStatus = GoogleSignInConfigurationValidator.validate()
+        guard googleSignInStatus.isAvailable, let clientId = googleSignInStatus.clientID else {
+            print("⚠️ \(googleSignInStatus.message ?? "Google Sign-In unavailable")")
+            return
         }
-        if let clientId = clientId {
-            GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientId)
+
+        GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientId)
             print("✅ Google Sign-In configured")
-        }
     }
 
     func signInWithGoogle() async {
-        isLoading = true
         errorMessage = nil
+        configureGoogleSignIn()
+        guard googleSignInStatus.isAvailable else {
+            errorMessage = googleSignInStatus.message
+            return
+        }
+
+        isLoading = true
         do {
             print("🔍 Starting Google Sign-In...")
             #if os(iOS) || targetEnvironment(macCatalyst)
@@ -611,7 +660,10 @@ class NativeAuthManager: NSObject, ObservableObject {
 
         var body = [
             "provider": provider,
+            "id_token": credential,
             "credential": credential,
+            "platform": nativePlatformName,
+            "auth_method": provider,
         ]
 
         // Add additional data

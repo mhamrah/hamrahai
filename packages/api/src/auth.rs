@@ -9,6 +9,7 @@ use axum::{
 use chrono::{Duration as ChronoDuration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::db::{
@@ -59,7 +60,7 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 
 #[derive(Deserialize)]
 pub struct NativeLoginRequest {
-    pub email: String,
+    pub email: Option<String>,
     pub name: Option<String>,
     pub picture: Option<String>,
     pub provider: Option<String>,
@@ -67,6 +68,8 @@ pub struct NativeLoginRequest {
     pub auth_method: Option<String>,
     pub platform: Option<String>,
     pub email_verified_at: Option<chrono::DateTime<Utc>>,
+    #[serde(alias = "credential")]
+    pub id_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -92,24 +95,69 @@ pub struct LogoutResponse {
     pub success: bool,
 }
 
+#[derive(Serialize)]
+struct AuthErrorResponse {
+    success: bool,
+    error: String,
+}
+
+struct VerifiedIdentity {
+    email: String,
+    name: Option<String>,
+    picture: Option<String>,
+    provider_id: Option<String>,
+    email_verified_at: Option<chrono::DateTime<Utc>>,
+}
+
 pub async fn auth_native(
     State(pool): State<DbPool>,
     headers: HeaderMap,
     Json(req): Json<NativeLoginRequest>,
 ) -> impl IntoResponse {
-    let platform = req.platform.as_deref().unwrap_or("web");
-    let provider = req.provider.as_deref();
-    let auth_method = req.auth_method.as_deref().or(provider).unwrap_or("oauth");
+    let platform = req
+        .platform
+        .as_deref()
+        .unwrap_or_else(|| {
+            if headers
+                .get("x-requested-with")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == "hamrah-ios")
+            {
+                "ios"
+            } else {
+                "web"
+            }
+        })
+        .to_string();
+    let provider = req.provider.as_deref().unwrap_or("oauth").to_string();
+    let identity = match verify_native_identity(&provider, &req).await {
+        Ok(identity) => identity,
+        Err(error) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(AuthErrorResponse {
+                    success: false,
+                    error,
+                }),
+            )
+                .into_response();
+        }
+    };
+    let auth_method = req
+        .auth_method
+        .as_deref()
+        .or(Some(provider.as_str()))
+        .unwrap_or("oauth");
     let user = match upsert_user_profile(
         &pool,
-        &req.email,
-        req.name.as_deref(),
-        req.picture.as_deref(),
-        provider,
-        req.provider_id.as_deref(),
+        &identity.email,
+        identity.name.as_deref(),
+        identity.picture.as_deref(),
+        Some(&provider),
+        identity.provider_id.as_deref(),
         Some(auth_method),
-        Some(platform),
-        req.email_verified_at,
+        Some(&platform),
+        identity.email_verified_at,
     )
     .await
     {
@@ -138,6 +186,135 @@ pub async fn auth_native(
         attach_session_cookies(response.headers_mut(), &headers, &refresh);
     }
     response
+}
+
+async fn verify_native_identity(
+    provider: &str,
+    req: &NativeLoginRequest,
+) -> Result<VerifiedIdentity, String> {
+    match provider {
+        "google" => verify_google_identity(req).await,
+        "apple" => verify_legacy_identity(req, "Apple identity token is missing"),
+        _ => verify_legacy_identity(req, "Email is required for native authentication"),
+    }
+}
+
+fn verify_legacy_identity(
+    req: &NativeLoginRequest,
+    missing_message: &str,
+) -> Result<VerifiedIdentity, String> {
+    let email = req
+        .email
+        .clone()
+        .filter(|email| !email.trim().is_empty())
+        .ok_or_else(|| missing_message.to_string())?;
+
+    Ok(VerifiedIdentity {
+        email,
+        name: req.name.clone(),
+        picture: req.picture.clone(),
+        provider_id: req.provider_id.clone(),
+        email_verified_at: req.email_verified_at,
+    })
+}
+
+async fn verify_google_identity(req: &NativeLoginRequest) -> Result<VerifiedIdentity, String> {
+    let id_token = req
+        .id_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| "Google ID token is missing".to_string())?;
+
+    if std::env::var("GOOGLE_AUTH_TEST_BYPASS").as_deref() == Ok("true") {
+        if let Some(email) = id_token.strip_prefix("test-google:") {
+            return Ok(VerifiedIdentity {
+                email: email.to_string(),
+                name: req.name.clone(),
+                picture: req.picture.clone(),
+                provider_id: Some("test-google-user".to_string()),
+                email_verified_at: Some(Utc::now()),
+            });
+        }
+    }
+
+    let token_info = reqwest::Client::new()
+        .get(format!(
+            "https://oauth2.googleapis.com/tokeninfo?id_token={id_token}"
+        ))
+        .send()
+        .await
+        .map_err(|error| format!("Google token verification failed: {error}"))?;
+
+    if !token_info.status().is_success() {
+        return Err("Google ID token was rejected".to_string());
+    }
+
+    let claims: Value = token_info
+        .json()
+        .await
+        .map_err(|error| format!("Failed to parse Google token response: {error}"))?;
+
+    let audience = claims
+        .get("aud")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Google token is missing an audience".to_string())?;
+    if !allowed_google_audiences()
+        .iter()
+        .any(|allowed| allowed == audience)
+    {
+        return Err("Google token audience is not allowed".to_string());
+    }
+
+    let email_verified = claims
+        .get("email_verified")
+        .and_then(|value| {
+            value
+                .as_bool()
+                .or_else(|| value.as_str().map(|raw| raw.eq_ignore_ascii_case("true")))
+        })
+        .unwrap_or(false);
+    if !email_verified {
+        return Err("Google account email is not verified".to_string());
+    }
+
+    let email = claims
+        .get("email")
+        .and_then(Value::as_str)
+        .filter(|email| !email.is_empty())
+        .ok_or_else(|| "Google token is missing an email".to_string())?
+        .to_string();
+
+    Ok(VerifiedIdentity {
+        email,
+        name: claims
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| req.name.clone()),
+        picture: claims
+            .get("picture")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| req.picture.clone()),
+        provider_id: claims
+            .get("sub")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| req.provider_id.clone()),
+        email_verified_at: Some(Utc::now()),
+    })
+}
+
+fn allowed_google_audiences() -> Vec<String> {
+    std::env::var("GOOGLE_ALLOWED_CLIENT_IDS")
+        .unwrap_or_else(|_| {
+            "66020219411-bs8v3cvpah62q616uopgk0iasebnh4jh.apps.googleusercontent.com".to_string()
+        })
+        .split(',')
+        .map(str::trim)
+        .filter(|audience| !audience.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 #[derive(Deserialize)]

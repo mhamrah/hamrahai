@@ -29,26 +29,21 @@ struct SettingsView: View {
     @State private var credentialToDelete: PasskeyCredential?
     @State private var showAddPasskey = false
     @State private var showBiometricSettings = false
-    @State private var showResetAttestationConfirm = false
     @State private var showLogoutConfirm = false
 
     // Editable preferences
-    @State private var defaultModel: String = "gpt-4o-mini"
+    @State private var defaultModel: String = SettingsModelCatalog.defaultModelId
     @State private var preferredModels: Set<String> = []
 
     // Model catalog
-    @State private var availableModels: [String] = defaultSuggestedModels
+    @State private var availableModels: [AIModelDTO] = SettingsModelCatalog.defaultModels
     @State private var isFetchingModels = false
 
     @State private var passkeys: [PasskeyCredential] = []
 
-    private static let defaultSuggestedModels: [String] = [
-        "gpt-4o-mini",
-        "claude-3.5-sonnet",
-        "gpt-4o",
-        "mistral-nemo",
-        "gpt-4o-realtime-preview",
-    ]
+    private var availableModelIds: [String] {
+        availableModels.filter(\.isAvailable).map(\.id)
+    }
 
     var body: some View {
         Form {
@@ -88,17 +83,6 @@ struct SettingsView: View {
             }
         } message: {
             Text("Are you sure you want to remove this passkey? This action cannot be undone.")
-        }
-        .alert("Reset App Attestation?", isPresented: $showResetAttestationConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset", role: .destructive) {
-                AppAttestationManager.shared.resetAttestation()
-                infoMessage = "App Attestation state has been reset. Please restart the app."
-            }
-        } message: {
-            Text(
-                "This will delete the current App Attestation key and force the app to create a new one on next launch. This may help resolve authentication issues."
-            )
         }
         .alert("Sign Out?", isPresented: $showLogoutConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -163,6 +147,12 @@ struct SettingsView: View {
                             Text("Add Google Sign-In")
                                 .font(.subheadline)
                         }
+                    }
+                    .disabled(!authManager.googleSignInStatus.isAvailable)
+                    if let message = authManager.googleSignInStatus.message {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -353,8 +343,8 @@ struct SettingsView: View {
         Section("AI Models") {
             // Default model picker
             Picker("Default Model", selection: $defaultModel) {
-                ForEach(availableModels, id: \.self) { model in
-                    Text(model).tag(model)
+                ForEach(availableModels.filter(\.isAvailable)) { model in
+                    Text(model.display_name).tag(model.id)
                 }
             }
             .onChange(of: defaultModel) { _, _ in debounceAutosave() }
@@ -366,25 +356,25 @@ struct SettingsView: View {
                     .fontWeight(.medium)
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 8) {
-                    ForEach(availableModels, id: \.self) { model in
+                    ForEach(availableModels.filter(\.isAvailable)) { model in
                         Button(action: {
-                            if preferredModels.contains(model) {
-                                preferredModels.remove(model)
+                            if preferredModels.contains(model.id) {
+                                preferredModels.remove(model.id)
                             } else {
-                                preferredModels.insert(model)
+                                preferredModels.insert(model.id)
                             }
                             debounceAutosave()
                         }) {
-                            Text(model)
+                            Text(model.display_name)
                                 .font(.caption)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                                 .background(
-                                    preferredModels.contains(model)
+                                    preferredModels.contains(model.id)
                                         ? Color.accentColor : Color.secondary.opacity(0.2)
                                 )
                                 .foregroundColor(
-                                    preferredModels.contains(model) ? .white : .primary
+                                    preferredModels.contains(model.id) ? .white : .primary
                                 )
                                 .cornerRadius(8)
                         }
@@ -410,7 +400,7 @@ struct SettingsView: View {
                 Spacer()
                 Button("Clear Preferred") {
                     preferredModels = []
-                    debounceAutosave()
+                    Task { await saveToServer() }
                 }
             }
             .buttonStyle(.bordered)
@@ -421,11 +411,28 @@ struct SettingsView: View {
     private var syncEngineSection: some View {
         Section("Sync Engine") {
             Button {
-                Task { await syncEngine.runSyncNow(reason: "settings_manual_sync") }
+                Task { await runHealthSync() }
             } label: {
-                Label("Run Sync Now", systemImage: "arrow.clockwise")
+                if syncEngine.isSyncingNow {
+                    Label("Syncing", systemImage: "arrow.triangle.2.circlepath")
+                } else {
+                    Label("Sync Now", systemImage: "arrow.clockwise")
+                }
             }
             .buttonStyle(.borderedProminent)
+            .disabled(syncEngine.isSyncingNow || accessToken() == nil)
+
+            LabeledContent("Queued", value: "\(syncEngine.queuedLinkCount)")
+            if let lastSyncAt = syncEngine.lastSyncAt {
+                LabeledContent(
+                    "Last Sync",
+                    value: lastSyncAt.formatted(date: .abbreviated, time: .shortened))
+            }
+            if let lastSyncError = syncEngine.lastSyncError {
+                Text(lastSyncError)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -438,19 +445,22 @@ struct SettingsView: View {
                 Label("API Environment", systemImage: "globe")
             }
 
-            Button {
-                copyAPIPromptToClipboard()
-            } label: {
-                Label("Copy Settings API Prompt", systemImage: "doc.on.doc")
-            }
-            .buttonStyle(.bordered)
+            #if DEBUG
+                Button {
+                    copyAPIPromptToClipboard()
+                } label: {
+                    Label("Copy Settings API Prompt", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
 
-            Button(role: .destructive) {
-                showResetAttestationConfirm = true
-            } label: {
-                Label("Reset App Attestation", systemImage: "shield.slash")
-            }
-            .buttonStyle(.bordered)
+                Button(role: .destructive) {
+                    AppAttestationManager.shared.resetAttestation()
+                    infoMessage = "App Attestation will be recreated automatically."
+                } label: {
+                    Label("Reset App Attestation", systemImage: "shield.slash")
+                }
+                .buttonStyle(.bordered)
+            #endif
         }
     }
 
@@ -491,7 +501,8 @@ struct SettingsView: View {
 
     private func loadFromServerIfEmpty() async {
         // Load once from server if we have no server values yet
-        if preferredModels.isEmpty || accessToken() == nil { return }
+        if accessToken() == nil { return }
+        if !preferredModels.isEmpty || defaultModel != SettingsModelCatalog.defaultModelId { return }
         await loadFromServer()
     }
 
@@ -555,7 +566,7 @@ struct SettingsView: View {
         defer { isFetchingModels = false }
         // Try a best-effort fetch. If missing, keep local defaults.
         do {
-            struct CatalogResponse: Codable { let models: [String] }
+            struct CatalogResponse: Codable { let models: [AIModelDTO] }
             let token = accessToken()
             let resp: CatalogResponse = try await SecureAPIService.shared.get(
                 endpoint: "/v1/models",
@@ -563,12 +574,14 @@ struct SettingsView: View {
                 responseType: CatalogResponse.self
             )
             await MainActor.run {
-                availableModels = resp.models.isEmpty ? Self.defaultSuggestedModels : resp.models
+                availableModels = resp.models.isEmpty ? SettingsModelCatalog.defaultModels : resp.models
+                pruneUnavailableModels(showMessage: true)
             }
         } catch {
             // Silently fall back to defaults if the endpoint is not implemented
             await MainActor.run {
-                availableModels = Self.defaultSuggestedModels
+                availableModels = SettingsModelCatalog.defaultModels
+                pruneUnavailableModels(showMessage: false)
             }
         }
     }
@@ -577,10 +590,9 @@ struct SettingsView: View {
 
     private func copyAPIPromptToClipboard() {
         #if os(iOS)
-            UIPasteboard.general.string = SettingsAPIPrompt.prompt
+            PlatformBridge.copyToClipboard(SettingsAPIPrompt.prompt)
         #elseif os(macOS)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(SettingsAPIPrompt.prompt, forType: .string)
+            PlatformBridge.copyToClipboard(SettingsAPIPrompt.prompt)
         #endif
         infoMessage = "API prompt copied to clipboard."
     }
@@ -592,6 +604,7 @@ struct SettingsView: View {
     private func mapDTOToState(_ dto: UserPrefsDTO) {
         defaultModel = dto.default_model
         preferredModels = Set(dto.preferred_models)
+        pruneUnavailableModels(showMessage: false)
     }
 
     private func makeDTOFromState() -> UserPrefsDTO {
@@ -631,6 +644,10 @@ struct SettingsView: View {
 
     private func addGoogleSignIn() {
         errorMessage = nil
+        guard authManager.googleSignInStatus.isAvailable else {
+            errorMessage = authManager.googleSignInStatus.message
+            return
+        }
         Task {
             await authManager.signInWithGoogle()
             await MainActor.run {
@@ -742,6 +759,34 @@ struct SettingsView: View {
             }
         }
     }
+
+    private func pruneUnavailableModels(showMessage: Bool) {
+        let validIds = Set(availableModelIds)
+        let originalDefault = defaultModel
+        let originalPreferred = preferredModels
+
+        if !validIds.contains(defaultModel) {
+            defaultModel = availableModelIds.first ?? SettingsModelCatalog.defaultModelId
+        }
+        preferredModels = preferredModels.intersection(validIds)
+
+        if showMessage && (originalDefault != defaultModel || originalPreferred != preferredModels) {
+            infoMessage = "Models updated. Deprecated selections were removed."
+            applyToStore()
+        }
+    }
+
+    private func runHealthSync() async {
+        if authManager.isTokenExpiringSoon() {
+            _ = await authManager.refreshToken()
+        }
+        if let token = authManager.accessToken ?? accessToken() {
+            await SecureAPIService.shared.initializeAttestation(accessToken: token)
+        }
+        await syncEngine.runSyncNow(reason: "settings_manual_sync")
+        await fetchModelCatalog()
+        await loadFromServer()
+    }
 }
 
 struct PasskeyRow: View {
@@ -803,12 +848,12 @@ struct PasskeyRow: View {
 struct UserPrefsDTO: Codable {
     var default_model: String
     var preferred_models: [String]
-    var last_updated_at: Date?
+    var last_updated_at: String?
 
     init(
         default_model: String,
         preferred_models: [String],
-        last_updated_at: Date? = nil
+        last_updated_at: String? = nil
     ) {
         self.default_model = default_model
         self.preferred_models = preferred_models
@@ -821,6 +866,43 @@ struct UserPrefsDTO: Codable {
             "preferred_models": preferred_models,
         ]
     }
+}
+
+struct AIModelDTO: Codable, Identifiable {
+    let id: String
+    let display_name: String
+    let provider: String
+    let status: String
+    let replacement_id: String?
+
+    var isAvailable: Bool {
+        status == "available"
+    }
+}
+
+enum SettingsModelCatalog {
+    static let defaultModelId = "@cf/zai-org/glm-4.7-flash"
+
+    static let defaultModels: [AIModelDTO] = [
+        AIModelDTO(
+            id: "@cf/zai-org/glm-4.7-flash",
+            display_name: "GLM 4.7 Flash",
+            provider: "Cloudflare Workers AI",
+            status: "available",
+            replacement_id: nil),
+        AIModelDTO(
+            id: "@cf/google/gemma-4-26b-a4b-it",
+            display_name: "Gemma 4 26B",
+            provider: "Cloudflare Workers AI",
+            status: "available",
+            replacement_id: nil),
+        AIModelDTO(
+            id: "@cf/moonshotai/kimi-k2.6",
+            display_name: "Kimi K2.6",
+            provider: "Cloudflare Workers AI",
+            status: "available",
+            replacement_id: nil),
+    ]
 }
 
 // MARK: - API Prompt (copy-to-clipboard)
