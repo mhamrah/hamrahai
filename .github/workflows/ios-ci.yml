@@ -91,6 +91,19 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/hamrah-ios-tests.xcresult" \
             -skip-testing:hamrah-ios-uitests
 
+      - name: Archive iOS app for Release
+        if: steps.changes.outputs.should_run == 'true'
+        run: |
+          xcodebuild archive \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/hamrah-ios-release.xcarchive" \
+            -derivedDataPath "${DERIVED_DATA_PATH}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}"
+
       - name: Upload test results
         if: always() && steps.changes.outputs.should_run == 'true'
         uses: actions/upload-artifact@v7.0.1
