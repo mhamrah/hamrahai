@@ -225,16 +225,16 @@ async fn verify_google_identity(req: &NativeLoginRequest) -> Result<VerifiedIden
         .filter(|token| !token.trim().is_empty())
         .ok_or_else(|| "Google ID token is missing".to_string())?;
 
-    if std::env::var("GOOGLE_AUTH_TEST_BYPASS").as_deref() == Ok("true") {
-        if let Some(email) = id_token.strip_prefix("test-google:") {
-            return Ok(VerifiedIdentity {
-                email: email.to_string(),
-                name: req.name.clone(),
-                picture: req.picture.clone(),
-                provider_id: Some("test-google-user".to_string()),
-                email_verified_at: Some(Utc::now()),
-            });
-        }
+    if std::env::var("GOOGLE_AUTH_TEST_BYPASS").as_deref() == Ok("true")
+        && let Some(email) = id_token.strip_prefix("test-google:")
+    {
+        return Ok(VerifiedIdentity {
+            email: email.to_string(),
+            name: req.name.clone(),
+            picture: req.picture.clone(),
+            provider_id: Some("test-google-user".to_string()),
+            email_verified_at: Some(Utc::now()),
+        });
     }
 
     let token_info = reqwest::Client::new()
