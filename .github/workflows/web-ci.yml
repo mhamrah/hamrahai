@@ -2,16 +2,16 @@ name: Web - CI Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
-      - 'packages/web/**'
-      - 'packages/shared/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - '.github/workflows/web-ci.yml'
+      - "packages/web/**"
+      - "packages/shared/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/web-ci.yml"
   pull_request:
-    branches: [main, develop]
+    branches: [main]
 
 jobs:
   test:
