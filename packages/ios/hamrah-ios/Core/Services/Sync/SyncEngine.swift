@@ -10,6 +10,10 @@ import SwiftData
 /// Triggers: app launch/foreground, NWPathMonitor, BGProcessingTask, pull-to-refresh.
 final class SyncEngine: ObservableObject {
     let objectWillChange = ObservableObjectPublisher()
+    @Published private(set) var isSyncingNow = false
+    @Published private(set) var lastSyncAt: Date?
+    @Published private(set) var lastSyncError: String?
+    @Published private(set) var queuedLinkCount = 0
 
     // MARK: - Dependencies
 
@@ -109,18 +113,27 @@ final class SyncEngine: ObservableObject {
     private func performSync(reason: String) async {
         guard !isSyncing else { return }
         isSyncing = true
-        defer { isSyncing = false }
+        isSyncingNow = true
+        lastSyncError = nil
+        defer {
+            isSyncing = false
+            isSyncingNow = false
+        }
 
         guard accessToken() != nil else {
             logger.info("Skipping sync; no access token available. reason=\(reason, privacy: .public)")
+            lastSyncError = "Sign in to sync."
             return
         }
 
         let context = modelContainer.mainContext
+        queuedLinkCount = queuedLinks(context).count
         logger.info("Starting sync; reason=\(reason, privacy: .public)")
 
         await syncOutboundLinks(context: context)
         await syncInboundLinks(context: context)
+        queuedLinkCount = queuedLinks(context).count
+        lastSyncAt = Date()
 
         logger.info("Finished sync; reason=\(reason, privacy: .public)")
     }
@@ -182,6 +195,7 @@ final class SyncEngine: ObservableObject {
             } catch {
                 logger.warning(
                     "POST /links failed: \(error.localizedDescription, privacy: .public)")
+                lastSyncError = error.localizedDescription
                 markFailure(link, error: error)
             }
         }
@@ -189,6 +203,7 @@ final class SyncEngine: ObservableObject {
         do { try context.save() } catch {
             logger.error(
                 "Failed to save outbound changes: \(error.localizedDescription, privacy: .public)")
+            lastSyncError = error.localizedDescription
         }
     }
 
@@ -210,6 +225,7 @@ final class SyncEngine: ObservableObject {
         } catch {
             logger.warning(
                 "GET /links delta failed: \(error.localizedDescription, privacy: .public)")
+            lastSyncError = error.localizedDescription
         }
     }
 

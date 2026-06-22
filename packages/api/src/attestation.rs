@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use base64::Engine;
 use chrono::{Duration, Utc};
@@ -77,6 +77,10 @@ fn is_ios_simulator(user_agent: Option<&str>) -> bool {
 fn get_team_id() -> Result<String, String> {
     std::env::var("APPLE_TEAM_ID")
         .map_err(|_| "APPLE_TEAM_ID environment variable not set".to_string())
+}
+
+fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|h| h.to_str().ok())
 }
 
 // ============================================================================
@@ -608,4 +612,73 @@ pub async fn verify_assertion(
             error: None,
         }),
     )
+}
+
+pub async fn reject_invalid_request_headers(
+    pool: &DbPool,
+    headers: &HeaderMap,
+) -> Option<Response> {
+    match verify_request_headers_if_present(pool, headers).await {
+        Ok(()) => None,
+        Err(error) => Some(
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(AssertionResponse {
+                    success: false,
+                    error: Some(error),
+                }),
+            )
+                .into_response(),
+        ),
+    }
+}
+
+async fn verify_request_headers_if_present(
+    pool: &DbPool,
+    headers: &HeaderMap,
+) -> Result<(), String> {
+    if header_str(headers, "x-ios-development") == Some("simulator")
+        || header_str(headers, "x-app-attestation-mode") == Some("none")
+    {
+        return Ok(());
+    }
+
+    let Some(key_id) = header_str(headers, "x-ios-app-attest-key") else {
+        return Ok(());
+    };
+    let assertion_base64 = header_str(headers, "x-ios-app-attest-assertion")
+        .ok_or_else(|| "Missing App Attest assertion".to_string())?;
+    let bundle_id = header_str(headers, "x-ios-app-bundle-id")
+        .ok_or_else(|| "Missing App Attest bundle ID".to_string())?;
+    let client_data_base64 = header_str(headers, "x-request-challenge")
+        .ok_or_else(|| "Missing App Attest request challenge".to_string())?;
+
+    let stored_key = get_key(pool, key_id, bundle_id)
+        .await
+        .map_err(|error| format!("App Attest key lookup failed: {error}"))?
+        .ok_or_else(|| "Unknown App Attest key".to_string())?;
+
+    let team_id = get_team_id()?;
+    let app_id = format!("{team_id}.{bundle_id}");
+    let client_data_bytes = base64::engine::general_purpose::STANDARD
+        .decode(client_data_base64)
+        .map_err(|_| "Invalid App Attest request challenge encoding".to_string())?;
+    let assertion = Assertion::from_base64(assertion_base64)
+        .map_err(|_| "Invalid App Attest assertion".to_string())?;
+
+    assertion
+        .verify(
+            client_data_bytes,
+            &app_id,
+            stored_key.public_key,
+            stored_key.counter as u32,
+            client_data_base64,
+        )
+        .map_err(|_| "App Attest assertion verification failed".to_string())?;
+
+    update_key_counter(pool, key_id, stored_key.counter + 1)
+        .await
+        .map_err(|error| format!("Failed to update App Attest counter: {error}"))?;
+
+    Ok(())
 }

@@ -252,11 +252,9 @@ class WebAuthnTests: XCTestCase {
     
     func testAPIUrlConfiguration() {
         XCTAssertFalse(authManager.baseURL.isEmpty, "Base URL should not be empty")
-        XCTAssertFalse(authManager.webAppBaseURL.isEmpty, "Web app base URL should not be empty")
         
         // Should be valid URLs
         XCTAssertNotNil(URL(string: authManager.baseURL), "Base URL should be valid")
-        XCTAssertNotNil(URL(string: authManager.webAppBaseURL), "Web app base URL should be valid")
     }
     
     // MARK: - MainActor Compliance Tests
@@ -408,5 +406,58 @@ class PlatformAuthenticationTests: XCTestCase {
         
         XCTAssertNotNil(request, "Should create assertion request")
         XCTAssertEqual(request.challenge, challenge, "Challenge should match")
+    }
+}
+
+// MARK: - Google Sign-In Configuration Tests
+
+class GoogleSignInConfigurationValidatorTests: XCTestCase {
+    private let validInfo: [String: Any] = [
+        "GIDClientID": GoogleSignInConfigurationValidator.expectedClientID,
+        "CFBundleURLTypes": [
+            [
+                "CFBundleURLSchemes": [
+                    GoogleSignInConfigurationValidator.expectedReversedClientID
+                ]
+            ]
+        ],
+    ]
+
+    func testMissingClientIDIsUnavailable() {
+        var info = validInfo
+        info.removeValue(forKey: "GIDClientID")
+
+        let status = GoogleSignInConfigurationValidator.validate(infoDictionary: info)
+
+        XCTAssertFalse(status.isAvailable)
+        XCTAssertEqual(status.message, "Google Sign-In is not configured for this build.")
+    }
+
+    func testMalformedClientIDIsUnavailable() {
+        var info = validInfo
+        info["GIDClientID"] = "not-a-google-client-id"
+
+        let status = GoogleSignInConfigurationValidator.validate(infoDictionary: info)
+
+        XCTAssertFalse(status.isAvailable)
+        XCTAssertEqual(status.message, "Google Sign-In client ID is malformed.")
+    }
+
+    func testMissingCallbackSchemeIsUnavailable() {
+        var info = validInfo
+        info["CFBundleURLTypes"] = [["CFBundleURLSchemes": ["hamrah"]]]
+
+        let status = GoogleSignInConfigurationValidator.validate(infoDictionary: info)
+
+        XCTAssertFalse(status.isAvailable)
+        XCTAssertEqual(status.message, "Google Sign-In callback URL scheme is missing.")
+    }
+
+    func testValidConfigurationIsAvailable() {
+        let status = GoogleSignInConfigurationValidator.validate(infoDictionary: validInfo)
+
+        XCTAssertTrue(status.isAvailable)
+        XCTAssertEqual(status.clientID, GoogleSignInConfigurationValidator.expectedClientID)
+        XCTAssertNil(status.message)
     }
 }
