@@ -326,6 +326,78 @@ async fn http_native_google_rejects_missing_id_token() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn http_native_apple_accepts_identity_token_email_without_request_email() -> anyhow::Result<()>
+{
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("APPLE_AUTH_TEST_BYPASS", "true");
+    }
+
+    let email = format!("native-apple-{}@example.com", Uuid::new_v4());
+    let payload = json!({
+        "provider": "apple",
+        "platform": "ios",
+        "id_token": format!("test-apple:{email}"),
+        "provider_id": "apple-user-123"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(parsed["success"], true);
+    assert!(
+        parsed["access_token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+    );
+    assert_eq!(parsed["user"]["email"], email);
+    assert_eq!(parsed["user"]["provider"], "apple");
+    assert_eq!(parsed["user"]["provider_id"], "apple-user-123");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_native_apple_rejects_missing_identity_token() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let payload = json!({
+        "provider": "apple",
+        "platform": "ios"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(parsed["success"], false);
+    assert_eq!(parsed["error"], "Apple identity token is missing");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_models_returns_backend_catalog_with_deprecated_replacements() -> anyhow::Result<()> {
     let Some((_pool, router)) = setup_router().await? else {
         return Ok(());

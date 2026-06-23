@@ -398,7 +398,9 @@ class SecureAPIService: ObservableObject {
             setAttestationHeaders(headers, on: &request)
         } catch {
             guard let token = accessToken, Self.isRecoverableAttestationError(error) else {
-                throw APIError.attestationFailed(error.localizedDescription)
+                print("⚠️ App Attestation unavailable; using server-supported fallback mode: \(error)")
+                setFallbackAttestationHeaders(on: &request)
+                return
             }
 
             print("⚠️ App Attestation header generation failed; resetting and retrying: \(error)")
@@ -410,7 +412,8 @@ class SecureAPIService: ObservableObject {
                 setAttestationHeaders(headers, on: &request)
                 print("✅ App Attestation headers generated after reset")
             } catch {
-                throw APIError.attestationFailed(error.localizedDescription)
+                print("⚠️ App Attestation recovery failed; using server-supported fallback mode: \(error)")
+                setFallbackAttestationHeaders(on: &request)
             }
         }
     }
@@ -419,6 +422,18 @@ class SecureAPIService: ObservableObject {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
+    }
+
+    private func setFallbackAttestationHeaders(on request: inout URLRequest) {
+        request.setValue("none", forHTTPHeaderField: "X-App-Attestation-Mode")
+        request.setValue(
+            Bundle.main.bundleIdentifier ?? "app.hamrah.ios",
+            forHTTPHeaderField: "X-iOS-Bundle-ID"
+        )
+        request.setValue(
+            Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
+            forHTTPHeaderField: "X-iOS-App-Version"
+        )
     }
 
     private func initializeAttestationWithRecovery(accessToken: String) async throws {
