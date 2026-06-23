@@ -268,6 +268,10 @@ class NativeAuthManager: NSObject, ObservableObject {
         }
     }
 
+    private struct BackendAuthErrorResponse: Decodable {
+        let error: String?
+    }
+
     struct WebAuthnBeginResponse: Codable {
         let success: Bool
         let options: PublicKeyCredentialRequestOptions?
@@ -679,12 +683,17 @@ class NativeAuthManager: NSObject, ObservableObject {
             httpResponse.statusCode == 200
         else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let backendError =
+                (try? JSONDecoder().decode(BackendAuthErrorResponse.self, from: data))?.error
+                ?? String(data: data, encoding: .utf8)
             print("❌ Auth failed with status code: \(statusCode)")
             throw NSError(
                 domain: "Auth", code: -1,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Backend authentication failed with status \(statusCode)"
+                        backendError.map {
+                            "Backend authentication failed with status \(statusCode): \($0)"
+                        } ?? "Backend authentication failed with status \(statusCode)"
                 ])
         }
 
@@ -1050,6 +1059,7 @@ extension NativeAuthManager: ASAuthorizationControllerDelegate {
                         ]
                         .compactMap { $0 }
                         .joined(separator: " "),
+                        "provider_id": appleIDCredential.user,
                     ]
 
                     print("🍎 Sending authentication request to backend...")

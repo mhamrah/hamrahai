@@ -7,7 +7,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode,
+    jwk::JwkSet,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -109,6 +112,13 @@ struct VerifiedIdentity {
     email_verified_at: Option<chrono::DateTime<Utc>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AppleClaims {
+    sub: String,
+    email: Option<String>,
+    email_verified: Option<Value>,
+}
+
 pub async fn auth_native(
     State(pool): State<DbPool>,
     headers: HeaderMap,
@@ -194,7 +204,7 @@ async fn verify_native_identity(
 ) -> Result<VerifiedIdentity, String> {
     match provider {
         "google" => verify_google_identity(req).await,
-        "apple" => verify_legacy_identity(req, "Apple identity token is missing"),
+        "apple" => verify_apple_identity(req).await,
         _ => verify_legacy_identity(req, "Email is required for native authentication"),
     }
 }
@@ -305,11 +315,108 @@ async fn verify_google_identity(req: &NativeLoginRequest) -> Result<VerifiedIden
     })
 }
 
+async fn verify_apple_identity(req: &NativeLoginRequest) -> Result<VerifiedIdentity, String> {
+    let id_token = req
+        .id_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| "Apple identity token is missing".to_string())?;
+
+    if std::env::var("APPLE_AUTH_TEST_BYPASS").as_deref() == Ok("true")
+        && let Some(email) = id_token.strip_prefix("test-apple:")
+    {
+        return Ok(VerifiedIdentity {
+            email: email.to_string(),
+            name: req.name.clone(),
+            picture: req.picture.clone(),
+            provider_id: req
+                .provider_id
+                .clone()
+                .or_else(|| Some("test-apple-user".to_string())),
+            email_verified_at: Some(Utc::now()),
+        });
+    }
+
+    let header =
+        decode_header(id_token).map_err(|error| format!("Invalid Apple token header: {error}"))?;
+    if header.alg != Algorithm::RS256 {
+        return Err("Apple token algorithm is not allowed".to_string());
+    }
+    let kid = header
+        .kid
+        .as_deref()
+        .ok_or_else(|| "Apple token is missing a key id".to_string())?;
+
+    let jwks: JwkSet = reqwest::Client::new()
+        .get("https://appleid.apple.com/auth/keys")
+        .send()
+        .await
+        .map_err(|error| format!("Apple key lookup failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("Apple key lookup failed: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("Failed to parse Apple keys: {error}"))?;
+
+    let jwk = jwks
+        .find(kid)
+        .ok_or_else(|| "No Apple signing key matched the token".to_string())?;
+    let decoding_key = DecodingKey::from_jwk(jwk)
+        .map_err(|error| format!("Invalid Apple signing key: {error}"))?;
+
+    let audiences = allowed_apple_audiences();
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_issuer(&["https://appleid.apple.com"]);
+    validation.set_audience(&audiences);
+
+    let claims = decode::<AppleClaims>(id_token, &decoding_key, &validation)
+        .map_err(|error| format!("Apple identity token was rejected: {error}"))?
+        .claims;
+
+    let email = claims
+        .email
+        .or_else(|| req.email.clone())
+        .filter(|email| !email.trim().is_empty())
+        .ok_or_else(|| "Apple token is missing an email".to_string())?;
+    let provider_id = (!claims.sub.trim().is_empty())
+        .then_some(claims.sub)
+        .or_else(|| req.provider_id.clone());
+
+    Ok(VerifiedIdentity {
+        email,
+        name: req.name.clone().filter(|name| !name.trim().is_empty()),
+        picture: req.picture.clone(),
+        provider_id,
+        email_verified_at: apple_email_is_verified(claims.email_verified).then(Utc::now),
+    })
+}
+
+fn apple_email_is_verified(value: Option<Value>) -> bool {
+    value
+        .and_then(|value| {
+            value
+                .as_bool()
+                .or_else(|| value.as_str().map(|raw| raw.eq_ignore_ascii_case("true")))
+        })
+        .unwrap_or(false)
+}
+
 fn allowed_google_audiences() -> Vec<String> {
     std::env::var("GOOGLE_ALLOWED_CLIENT_IDS")
         .unwrap_or_else(|_| {
             "66020219411-bs8v3cvpah62q616uopgk0iasebnh4jh.apps.googleusercontent.com".to_string()
         })
+        .split(',')
+        .map(str::trim)
+        .filter(|audience| !audience.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn allowed_apple_audiences() -> Vec<String> {
+    std::env::var("APPLE_ALLOWED_CLIENT_IDS")
+        .or_else(|_| std::env::var("APPLE_CLIENT_ID"))
+        .unwrap_or_else(|_| "app.hamrah.ios,app.hamrah.web".to_string())
         .split(',')
         .map(str::trim)
         .filter(|audience| !audience.is_empty())
