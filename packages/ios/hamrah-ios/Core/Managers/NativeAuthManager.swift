@@ -272,10 +272,31 @@ class NativeAuthManager: NSObject, ObservableObject {
         let error: String?
     }
 
+    static func backendAuthPayload(
+        provider: String,
+        credential: String,
+        platform: String,
+        additionalData: [String: String] = [:]
+    ) -> [String: String] {
+        var body = [
+            "provider": provider,
+            "id_token": credential,
+            "platform": platform,
+            "auth_method": provider,
+        ]
+
+        let reservedKeys = Set(body.keys)
+        for (key, value) in additionalData where !reservedKeys.contains(key) {
+            body[key] = value
+        }
+
+        return body
+    }
+
     struct WebAuthnBeginResponse: Codable {
         let success: Bool
         let options: PublicKeyCredentialRequestOptions?
-        let challengeId: String
+        let challengeId: String?
         let error: String?
 
         enum CodingKeys: String, CodingKey {
@@ -500,7 +521,11 @@ class NativeAuthManager: NSObject, ObservableObject {
                     userInfo: [NSLocalizedDescriptionKey: "No authentication options received"])
             }
 
-            let challengeId = beginOptions.challengeId
+            guard let challengeId = beginOptions.challengeId, !challengeId.isEmpty else {
+                throw NSError(
+                    domain: "WebAuthn", code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "No authentication challenge received"])
+            }
 
             // Step 2: Perform platform authentication
             let assertion = try await performPlatformAuthentication(options: options)
@@ -662,18 +687,12 @@ class NativeAuthManager: NSObject, ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("hamrah-ios", forHTTPHeaderField: "X-Requested-With")
 
-        var body = [
-            "provider": provider,
-            "id_token": credential,
-            "credential": credential,
-            "platform": nativePlatformName,
-            "auth_method": provider,
-        ]
-
-        // Add additional data
-        for (key, value) in additionalData {
-            body[key] = value
-        }
+        let body = Self.backendAuthPayload(
+            provider: provider,
+            credential: credential,
+            platform: nativePlatformName,
+            additionalData: additionalData
+        )
 
         request.httpBody = try JSONEncoder().encode(body)
 

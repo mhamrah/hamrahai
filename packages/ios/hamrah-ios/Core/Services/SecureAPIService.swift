@@ -397,23 +397,32 @@ class SecureAPIService: ObservableObject {
             let headers = try await attestationManager.generateAttestationHeaders(for: challenge)
             setAttestationHeaders(headers, on: &request)
         } catch {
-            guard let token = accessToken, Self.isRecoverableAttestationError(error) else {
+            switch Self.attestationFailureStrategy(for: error, accessToken: accessToken) {
+            case .fallback:
                 print("⚠️ App Attestation unavailable; using server-supported fallback mode: \(error)")
                 setFallbackAttestationHeaders(on: &request)
                 return
-            }
+            case .recoverThenFallback:
+                guard let token = accessToken else {
+                    setFallbackAttestationHeaders(on: &request)
+                    return
+                }
 
-            print("⚠️ App Attestation header generation failed; resetting and retrying: \(error)")
-            attestationManager.forceReset()
+                print("⚠️ App Attestation header generation failed; resetting and retrying: \(error)")
+                attestationManager.forceReset()
 
-            do {
-                try await attestationManager.initializeAttestation(accessToken: token)
-                let headers = try await attestationManager.generateAttestationHeaders(for: challenge)
-                setAttestationHeaders(headers, on: &request)
-                print("✅ App Attestation headers generated after reset")
-            } catch {
-                print("⚠️ App Attestation recovery failed; using server-supported fallback mode: \(error)")
-                setFallbackAttestationHeaders(on: &request)
+                do {
+                    try await attestationManager.initializeAttestation(accessToken: token)
+                    let headers = try await attestationManager.generateAttestationHeaders(
+                        for: challenge)
+                    setAttestationHeaders(headers, on: &request)
+                    print("✅ App Attestation headers generated after reset")
+                } catch {
+                    print(
+                        "⚠️ App Attestation recovery failed; using server-supported fallback mode: \(error)"
+                    )
+                    setFallbackAttestationHeaders(on: &request)
+                }
             }
         }
     }
@@ -425,15 +434,41 @@ class SecureAPIService: ObservableObject {
     }
 
     private func setFallbackAttestationHeaders(on request: inout URLRequest) {
-        request.setValue("none", forHTTPHeaderField: "X-App-Attestation-Mode")
-        request.setValue(
-            Bundle.main.bundleIdentifier ?? "app.hamrah.ios",
-            forHTTPHeaderField: "X-iOS-Bundle-ID"
+        setAttestationHeaders(
+            Self.fallbackAttestationHeaders(
+                bundleIdentifier: Bundle.main.bundleIdentifier ?? "app.hamrah.ios",
+                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                    ?? "unknown"
+            ),
+            on: &request
         )
-        request.setValue(
-            Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
-            forHTTPHeaderField: "X-iOS-App-Version"
-        )
+    }
+
+    enum AttestationFailureStrategy: Equatable {
+        case fallback
+        case recoverThenFallback
+    }
+
+    static func attestationFailureStrategy(
+        for error: Error,
+        accessToken: String?
+    ) -> AttestationFailureStrategy {
+        if accessToken != nil, isRecoverableAttestationError(error) {
+            return .recoverThenFallback
+        }
+
+        return .fallback
+    }
+
+    static func fallbackAttestationHeaders(
+        bundleIdentifier: String,
+        appVersion: String
+    ) -> [String: String] {
+        [
+            "X-App-Attestation-Mode": "none",
+            "X-iOS-Bundle-ID": bundleIdentifier,
+            "X-iOS-App-Version": appVersion,
+        ]
     }
 
     private func initializeAttestationWithRecovery(accessToken: String) async throws {
