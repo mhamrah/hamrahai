@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 use crate::db::{
     DbPool, User, create_session, delete_session_by_token, get_session_by_token,
-    get_user_by_session_token, rotate_session, upsert_user_profile,
+    get_user_by_auth_provider, get_user_by_session_token, link_user_auth_provider,
+    list_user_auth_provider_names, rotate_session, update_user_login_profile, upsert_user_profile,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,11 +79,57 @@ pub struct NativeLoginRequest {
 #[derive(Serialize)]
 pub struct TokensResponse {
     pub success: bool,
-    pub user: User,
+    pub user: AuthUserResponse,
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
     pub expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+pub struct AuthUserResponse {
+    pub id: Uuid,
+    pub email: String,
+    pub name: Option<String>,
+    pub picture: Option<String>,
+    pub provider: Option<String>,
+    pub provider_id: Option<String>,
+    pub auth_method: Option<String>,
+    pub auth_providers: Vec<String>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub updated_at: Option<chrono::DateTime<Utc>>,
+    pub last_login_at: Option<chrono::DateTime<Utc>>,
+    pub last_login_platform: Option<String>,
+    pub email_verified_at: Option<chrono::DateTime<Utc>>,
+}
+
+impl AuthUserResponse {
+    async fn from_user(pool: &DbPool, user: User) -> Self {
+        let mut auth_providers = list_user_auth_provider_names(pool, user.id)
+            .await
+            .unwrap_or_default();
+        if auth_providers.is_empty()
+            && let Some(provider) = user.provider.as_ref()
+        {
+            auth_providers.push(provider.clone());
+        }
+
+        Self {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            picture: user.picture,
+            provider: user.provider,
+            provider_id: user.provider_id,
+            auth_method: user.auth_method,
+            auth_providers,
+            created_at: user.created_at,
+            updated_at: user.updated_at,
+            last_login_at: user.last_login_at,
+            last_login_platform: user.last_login_platform,
+            email_verified_at: user.email_verified_at,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -158,9 +205,26 @@ pub async fn auth_native(
         .as_deref()
         .or(Some(provider.as_str()))
         .unwrap_or("oauth");
-    let user = match upsert_user_profile(
+    let current_user = current_bearer_user(&pool, &headers).await;
+    let user = match resolve_native_user(&pool, &provider, &identity, current_user).await {
+        Ok(user) => user,
+        Err(ResolveNativeUserError::ProviderAlreadyLinked) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(AuthErrorResponse {
+                    success: false,
+                    error: "Auth provider is already linked to another account".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        Err(ResolveNativeUserError::Database) => {
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let user = match update_user_login_profile(
         &pool,
-        &identity.email,
+        user.id,
         identity.name.as_deref(),
         identity.picture.as_deref(),
         Some(&provider),
@@ -171,7 +235,7 @@ pub async fn auth_native(
     )
     .await
     {
-        Ok(u) => u,
+        Ok(user) => user,
         Err(_) => return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let refresh = Uuid::new_v4().to_string();
@@ -185,7 +249,7 @@ pub async fn auth_native(
     };
     let body = TokensResponse {
         success: true,
-        user,
+        user: AuthUserResponse::from_user(&pool, user).await,
         access_token: access,
         refresh_token: refresh.clone(),
         expires_in: 3600,
@@ -196,6 +260,92 @@ pub async fn auth_native(
         attach_session_cookies(response.headers_mut(), &headers, &refresh);
     }
     response
+}
+
+enum ResolveNativeUserError {
+    ProviderAlreadyLinked,
+    Database,
+}
+
+async fn current_bearer_user(pool: &DbPool, headers: &HeaderMap) -> Option<User> {
+    let claims = require_claims(headers).ok()?;
+    crate::db::get_user_by_id(pool, claims.sub)
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn resolve_native_user(
+    pool: &DbPool,
+    provider: &str,
+    identity: &VerifiedIdentity,
+    current_user: Option<User>,
+) -> Result<User, ResolveNativeUserError> {
+    if let Some(provider_id) = identity.provider_id.as_deref()
+        && let Some(linked_user) = get_user_by_auth_provider(pool, provider, provider_id)
+            .await
+            .map_err(|_| ResolveNativeUserError::Database)?
+    {
+        if let Some(current_user) = current_user.as_ref()
+            && linked_user.id != current_user.id
+        {
+            return Err(ResolveNativeUserError::ProviderAlreadyLinked);
+        }
+        link_identity(pool, linked_user.id, provider, identity).await?;
+        return Ok(linked_user);
+    }
+
+    let user = if let Some(current_user) = current_user {
+        current_user
+    } else {
+        upsert_user_profile(
+            pool,
+            &identity.email,
+            identity.name.as_deref(),
+            identity.picture.as_deref(),
+            Some(provider),
+            identity.provider_id.as_deref(),
+            Some(provider),
+            None,
+            identity.email_verified_at,
+        )
+        .await
+        .map_err(|_| ResolveNativeUserError::Database)?
+    };
+
+    link_identity(pool, user.id, provider, identity).await?;
+    Ok(user)
+}
+
+async fn link_identity(
+    pool: &DbPool,
+    user_id: Uuid,
+    provider: &str,
+    identity: &VerifiedIdentity,
+) -> Result<(), ResolveNativeUserError> {
+    if let Some(provider_id) = identity.provider_id.as_deref() {
+        link_user_auth_provider(
+            pool,
+            user_id,
+            provider,
+            provider_id,
+            &identity.email,
+            identity.name.as_deref(),
+            identity.picture.as_deref(),
+        )
+        .await
+        .map_err(|error| {
+            if error
+                .to_string()
+                .contains("already linked to another account")
+            {
+                ResolveNativeUserError::ProviderAlreadyLinked
+            } else {
+                ResolveNativeUserError::Database
+            }
+        })?;
+    }
+    Ok(())
 }
 
 async fn verify_native_identity(
@@ -262,7 +412,10 @@ async fn verify_google_identity(req: &NativeLoginRequest) -> Result<VerifiedIden
             email: email.to_string(),
             name: req.name.clone(),
             picture: req.picture.clone(),
-            provider_id: Some("test-google-user".to_string()),
+            provider_id: req
+                .provider_id
+                .clone()
+                .or_else(|| Some(format!("test-google-user:{email}"))),
             email_verified_at: Some(Utc::now()),
         });
     }
@@ -473,7 +626,7 @@ pub async fn auth_refresh(
     };
     let resp = TokensResponse {
         success: true,
-        user,
+        user: AuthUserResponse::from_user(&pool, user).await,
         access_token: access,
         refresh_token: new_refresh,
         expires_in: 3600,

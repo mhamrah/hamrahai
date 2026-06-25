@@ -410,6 +410,76 @@ async fn http_native_apple_accepts_matching_legacy_credential_alias() -> anyhow:
 }
 
 #[tokio::test]
+async fn http_native_oauth_links_google_and_apple_by_verified_email() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("APPLE_AUTH_TEST_BYPASS", "true");
+        env::set_var("GOOGLE_AUTH_TEST_BYPASS", "true");
+    }
+
+    let email = format!("linked-email-{}@example.com", Uuid::new_v4());
+    let apple_payload = json!({
+        "provider": "apple",
+        "platform": "ios",
+        "id_token": format!("test-apple:{email}"),
+        "provider_id": format!("apple-user-{email}")
+    });
+    let apple_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(apple_payload.to_string()))
+        .unwrap();
+    let apple_resp = router.clone().oneshot(apple_req).await.unwrap();
+    assert_eq!(apple_resp.status(), StatusCode::OK);
+    let apple_body = body::to_bytes(apple_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let apple_parsed: serde_json::Value = serde_json::from_slice(&apple_body).unwrap();
+    let user_id = apple_parsed["user"]["id"].as_str().unwrap().to_string();
+
+    let google_payload = json!({
+        "provider": "google",
+        "platform": "ios",
+        "id_token": format!("test-google:{email}")
+    });
+    let google_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(google_payload.to_string()))
+        .unwrap();
+    let google_resp = router.clone().oneshot(google_req).await.unwrap();
+    assert_eq!(google_resp.status(), StatusCode::OK);
+    let google_body = body::to_bytes(google_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let google_parsed: serde_json::Value = serde_json::from_slice(&google_body).unwrap();
+
+    assert_eq!(google_parsed["user"]["id"], user_id);
+    assert_eq!(google_parsed["user"]["auth_method"], "google");
+    assert!(
+        google_parsed["user"]["auth_providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider == "apple")
+    );
+    assert!(
+        google_parsed["user"]["auth_providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider == "google")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_native_apple_rejects_conflicting_token_fields_without_422() -> anyhow::Result<()> {
     let Some((_pool, router)) = setup_router().await? else {
         return Ok(());
@@ -439,6 +509,79 @@ async fn http_native_apple_rejects_conflicting_token_fields_without_422() -> any
     let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(parsed["success"], false);
     assert_eq!(parsed["error"], "Conflicting native auth tokens");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("APPLE_AUTH_TEST_BYPASS", "true");
+        env::set_var("GOOGLE_AUTH_TEST_BYPASS", "true");
+    }
+
+    let apple_email = format!("apple-link-{}@example.com", Uuid::new_v4());
+    let google_email = format!("google-link-{}@example.com", Uuid::new_v4());
+    let apple_payload = json!({
+        "provider": "apple",
+        "platform": "ios",
+        "id_token": format!("test-apple:{apple_email}"),
+        "provider_id": format!("apple-user-{apple_email}")
+    });
+    let apple_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(apple_payload.to_string()))
+        .unwrap();
+    let apple_resp = router.clone().oneshot(apple_req).await.unwrap();
+    assert_eq!(apple_resp.status(), StatusCode::OK);
+    let apple_body = body::to_bytes(apple_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let apple_parsed: serde_json::Value = serde_json::from_slice(&apple_body).unwrap();
+    let access_token = apple_parsed["access_token"].as_str().unwrap();
+    let user_id = apple_parsed["user"]["id"].as_str().unwrap().to_string();
+
+    let google_payload = json!({
+        "provider": "google",
+        "platform": "ios",
+        "id_token": format!("test-google:{google_email}")
+    });
+    let google_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {access_token}"))
+        .body(Body::from(google_payload.to_string()))
+        .unwrap();
+    let google_resp = router.clone().oneshot(google_req).await.unwrap();
+    assert_eq!(google_resp.status(), StatusCode::OK);
+    let google_body = body::to_bytes(google_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let google_parsed: serde_json::Value = serde_json::from_slice(&google_body).unwrap();
+
+    assert_eq!(google_parsed["user"]["id"], user_id);
+    assert_eq!(google_parsed["user"]["email"], apple_email);
+    assert!(
+        google_parsed["user"]["auth_providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider == "apple")
+    );
+    assert!(
+        google_parsed["user"]["auth_providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider == "google")
+    );
 
     Ok(())
 }

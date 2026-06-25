@@ -147,6 +147,7 @@ class NativeAuthManager: NSObject, ObservableObject {
         let name: String?
         let picture: String?
         let authMethod: String
+        let authProviders: [String]
         let createdAt: String?
 
         enum CodingKeys: String, CodingKey {
@@ -155,20 +156,35 @@ class NativeAuthManager: NSObject, ObservableObject {
             case name
             case picture
             case authMethod = "auth_method"
+            case authProviders = "auth_providers"
             case createdAt = "created_at"
         }
 
         // Explicit memberwise initializer
         init(
             id: String, email: String, name: String?, picture: String?, authMethod: String,
-            createdAt: String?
+            authProviders: [String] = [], createdAt: String?
         ) {
             self.id = id
             self.email = email
             self.name = name
             self.picture = picture
             self.authMethod = authMethod
+            self.authProviders = authProviders
             self.createdAt = createdAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            email = try container.decode(String.self, forKey: .email)
+            name = try container.decodeIfPresent(String.self, forKey: .name)
+            picture = try container.decodeIfPresent(String.self, forKey: .picture)
+            authMethod = try container.decodeIfPresent(String.self, forKey: .authMethod) ?? "oauth"
+            authProviders =
+                try container.decodeIfPresent([String].self, forKey: .authProviders)
+                ?? [authMethod]
+            createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         }
     }
 
@@ -217,6 +233,7 @@ class NativeAuthManager: NSObject, ObservableObject {
                         name: name,
                         picture: nil,
                         authMethod: "google",
+                        authProviders: ["google"],
                         createdAt: nil
                     )
                 }
@@ -686,6 +703,9 @@ class NativeAuthManager: NSObject, ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("hamrah-ios", forHTTPHeaderField: "X-Requested-With")
+        if let accessToken {
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
 
         let body = Self.backendAuthPayload(
             provider: provider,
@@ -751,6 +771,7 @@ class NativeAuthManager: NSObject, ObservableObject {
                         name: name,
                         picture: picture,
                         authMethod: provider,
+                        authProviders: [provider],
                         createdAt: nil
                     )
                     if !email.isEmpty {
@@ -961,7 +982,9 @@ class NativeAuthManager: NSObject, ObservableObject {
         let authTimestamp = keychain.retrieveDouble(for: "hamrah_auth_timestamp") ?? 0
         let dayAgo = Date().timeIntervalSince1970 - (24 * 60 * 60)  // 24 hours
 
-        if authTimestamp > 0 && authTimestamp < dayAgo {
+        if authTimestamp > 0 && authTimestamp < dayAgo
+            && keychain.retrieveString(for: "hamrah_refresh_token") == nil
+        {
             clearStoredAuth()
             isAuthenticated = false
             currentUser = nil
