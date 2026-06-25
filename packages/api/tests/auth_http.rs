@@ -370,6 +370,80 @@ async fn http_native_apple_accepts_identity_token_email_without_request_email() 
 }
 
 #[tokio::test]
+async fn http_native_apple_accepts_matching_legacy_credential_alias() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("APPLE_AUTH_TEST_BYPASS", "true");
+    }
+
+    let email = format!("native-apple-legacy-{}@example.com", Uuid::new_v4());
+    let token = format!("test-apple:{email}");
+    let payload = json!({
+        "provider": "apple",
+        "platform": "ios",
+        "id_token": token,
+        "credential": token,
+        "provider_id": "apple-user-legacy"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(parsed["success"], true);
+    assert_eq!(parsed["user"]["email"], email);
+    assert_eq!(parsed["user"]["provider"], "apple");
+    assert_eq!(parsed["user"]["provider_id"], "apple-user-legacy");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_native_apple_rejects_conflicting_token_fields_without_422() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("APPLE_AUTH_TEST_BYPASS", "true");
+    }
+
+    let payload = json!({
+        "provider": "apple",
+        "platform": "ios",
+        "id_token": "test-apple:first@example.com",
+        "credential": "test-apple:second@example.com"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(parsed["success"], false);
+    assert_eq!(parsed["error"], "Conflicting native auth tokens");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_native_apple_rejects_missing_identity_token() -> anyhow::Result<()> {
     let Some((_pool, router)) = setup_router().await? else {
         return Ok(());

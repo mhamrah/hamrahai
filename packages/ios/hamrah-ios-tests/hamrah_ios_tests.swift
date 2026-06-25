@@ -13,6 +13,7 @@ import Testing
     import DeviceCheck
 #endif
 
+@MainActor
 struct hamrah_ios_tests {
 
     @Test func example() async throws {
@@ -44,6 +45,144 @@ struct hamrah_ios_tests {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
 
         #expect(!SecureAPIService.isRecoverableAttestationError(error))
+    }
+
+    @MainActor
+    @Test func nativeAuthPayloadUsesOnlyCanonicalIdentityTokenField() throws {
+        let payload = NativeAuthManager.backendAuthPayload(
+            provider: "apple",
+            credential: "apple.jwt",
+            platform: "ios",
+            additionalData: [
+                "email": "person@example.com",
+                "name": "Person Example",
+                "provider_id": "apple-user-id",
+            ]
+        )
+
+        #expect(payload["provider"] == "apple")
+        #expect(payload["id_token"] == "apple.jwt")
+        #expect(payload["platform"] == "ios")
+        #expect(payload["auth_method"] == "apple")
+        #expect(payload["email"] == "person@example.com")
+        #expect(payload["credential"] == nil)
+
+        let encoded = try JSONEncoder().encode(payload)
+        let decoded = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: String])
+
+        #expect(decoded["id_token"] == "apple.jwt")
+        #expect(decoded["credential"] == nil)
+    }
+
+    @MainActor
+    @Test func nativeAuthPayloadDoesNotAllowMetadataToOverrideReservedFields() {
+        let payload = NativeAuthManager.backendAuthPayload(
+            provider: "google",
+            credential: "google.jwt",
+            platform: "ios",
+            additionalData: [
+                "provider": "apple",
+                "id_token": "attacker.jwt",
+                "platform": "web",
+                "auth_method": "password",
+                "email": "person@example.com",
+            ]
+        )
+
+        #expect(payload["provider"] == "google")
+        #expect(payload["id_token"] == "google.jwt")
+        #expect(payload["platform"] == "ios")
+        #expect(payload["auth_method"] == "google")
+        #expect(payload["email"] == "person@example.com")
+        #expect(payload["credential"] == nil)
+    }
+
+    @Test func webAuthnBeginResponseDecodesSnakeCaseSuccessPayload() throws {
+        let jsonData = """
+            {
+                "success": true,
+                "options": {
+                    "challenge": "test-challenge-base64",
+                    "challenge_id": "test-challenge-id",
+                    "rp_id": "hamrah.app",
+                    "timeout": 60000,
+                    "allow_credentials": []
+                },
+                "challenge_id": "test-challenge-id"
+            }
+            """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(
+            NativeAuthManager.WebAuthnBeginResponse.self,
+            from: jsonData
+        )
+
+        #expect(response.success)
+        #expect(response.options?.challengeId == "test-challenge-id")
+        #expect(response.challengeId == "test-challenge-id")
+    }
+
+    @Test func webAuthnBeginResponseDecodesBackendFailurePayload() throws {
+        let jsonData = """
+            {
+                "success": false,
+                "error": "User not found"
+            }
+            """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(
+            NativeAuthManager.WebAuthnBeginResponse.self,
+            from: jsonData
+        )
+
+        #expect(!response.success)
+        #expect(response.options == nil)
+        #expect(response.challengeId == nil)
+        #expect(response.error == "User not found")
+    }
+
+    @Test func deviceCheckUnknownSystemFailureUsesRecoveryThenFallbackWhenAuthenticated() {
+        #if os(iOS)
+            let error = NSError(
+                domain: DCErrorDomain,
+                code: DCError.Code.unknownSystemFailure.rawValue
+            )
+
+            #expect(SecureAPIService.isRecoverableAttestationError(error))
+            #expect(
+                SecureAPIService.attestationFailureStrategy(
+                    for: error,
+                    accessToken: "access-token"
+                ) == .recoverThenFallback
+            )
+        #endif
+    }
+
+    @Test func deviceCheckUnknownSystemFailureFallsBackForUnauthenticatedAuthBootstrap() {
+        #if os(iOS)
+            let error = NSError(
+                domain: DCErrorDomain,
+                code: DCError.Code.unknownSystemFailure.rawValue
+            )
+
+            #expect(
+                SecureAPIService.attestationFailureStrategy(
+                    for: error,
+                    accessToken: nil
+                ) == .fallback
+            )
+        #endif
+    }
+
+    @Test func fallbackAttestationHeadersMatchServerBypassContract() {
+        let headers = SecureAPIService.fallbackAttestationHeaders(
+            bundleIdentifier: "app.hamrah.ios",
+            appVersion: "1.2.3"
+        )
+
+        #expect(headers["X-App-Attestation-Mode"] == "none")
+        #expect(headers["X-iOS-Bundle-ID"] == "app.hamrah.ios")
+        #expect(headers["X-iOS-App-Version"] == "1.2.3")
     }
 
 }

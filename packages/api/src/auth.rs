@@ -71,8 +71,8 @@ pub struct NativeLoginRequest {
     pub auth_method: Option<String>,
     pub platform: Option<String>,
     pub email_verified_at: Option<chrono::DateTime<Utc>>,
-    #[serde(alias = "credential")]
     pub id_token: Option<String>,
+    pub credential: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -209,6 +209,30 @@ async fn verify_native_identity(
     }
 }
 
+fn native_identity_token<'a>(
+    req: &'a NativeLoginRequest,
+    missing_message: &str,
+) -> Result<&'a str, String> {
+    let id_token = req
+        .id_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty());
+    let credential = req
+        .credential
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty());
+
+    match (id_token, credential) {
+        (Some(id_token), Some(credential)) if id_token != credential => {
+            Err("Conflicting native auth tokens".to_string())
+        }
+        (Some(token), _) | (_, Some(token)) => Ok(token),
+        (None, None) => Err(missing_message.to_string()),
+    }
+}
+
 fn verify_legacy_identity(
     req: &NativeLoginRequest,
     missing_message: &str,
@@ -229,11 +253,7 @@ fn verify_legacy_identity(
 }
 
 async fn verify_google_identity(req: &NativeLoginRequest) -> Result<VerifiedIdentity, String> {
-    let id_token = req
-        .id_token
-        .as_deref()
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Google ID token is missing".to_string())?;
+    let id_token = native_identity_token(req, "Google ID token is missing")?;
 
     if std::env::var("GOOGLE_AUTH_TEST_BYPASS").as_deref() == Ok("true")
         && let Some(email) = id_token.strip_prefix("test-google:")
@@ -316,11 +336,7 @@ async fn verify_google_identity(req: &NativeLoginRequest) -> Result<VerifiedIden
 }
 
 async fn verify_apple_identity(req: &NativeLoginRequest) -> Result<VerifiedIdentity, String> {
-    let id_token = req
-        .id_token
-        .as_deref()
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Apple identity token is missing".to_string())?;
+    let id_token = native_identity_token(req, "Apple identity token is missing")?;
 
     if std::env::var("APPLE_AUTH_TEST_BYPASS").as_deref() == Ok("true")
         && let Some(email) = id_token.strip_prefix("test-apple:")
