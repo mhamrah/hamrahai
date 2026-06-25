@@ -105,6 +105,155 @@ pub async fn get_user_by_id(pool: &DbPool, id: Uuid) -> anyhow::Result<Option<Us
     Ok(u)
 }
 
+pub async fn get_user_by_auth_provider(
+    pool: &DbPool,
+    provider: &str,
+    provider_id: &str,
+) -> anyhow::Result<Option<User>> {
+    let u = sqlx::query_as::<_, User>(
+        r#"
+        SELECT u.id, u.email, u.name, u.picture, u.provider, u.provider_id, u.auth_method,
+               u.created_at, u.updated_at, u.last_login_at, u.last_login_platform,
+               u.email_verified_at
+        FROM users u
+        JOIN user_auth_providers p ON p.user_id = u.id
+        WHERE p.provider = $1 AND p.provider_id = $2
+        "#,
+    )
+    .bind(provider)
+    .bind(provider_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(u)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn link_user_auth_provider(
+    pool: &DbPool,
+    user_id: Uuid,
+    provider: &str,
+    provider_id: &str,
+    email: &str,
+    name: Option<&str>,
+    picture: Option<&str>,
+) -> anyhow::Result<()> {
+    if provider.trim().is_empty() || provider_id.trim().is_empty() {
+        return Ok(());
+    }
+
+    let linked_user_id: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT user_id
+        FROM user_auth_providers
+        WHERE provider = $1 AND provider_id = $2
+        "#,
+    )
+    .bind(provider)
+    .bind(provider_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(linked_user_id) = linked_user_id
+        && linked_user_id != user_id
+    {
+        return Err(anyhow::anyhow!(
+            "auth provider is already linked to another account"
+        ));
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO user_auth_providers (
+            user_id, provider, provider_id, email, name, picture, last_used_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (user_id, provider) DO UPDATE SET
+            provider_id = EXCLUDED.provider_id,
+            email = EXCLUDED.email,
+            name = COALESCE(EXCLUDED.name, user_auth_providers.name),
+            picture = COALESCE(EXCLUDED.picture, user_auth_providers.picture),
+            updated_at = NOW(),
+            last_used_at = NOW()
+        "#,
+    )
+    .bind(user_id)
+    .bind(provider)
+    .bind(provider_id)
+    .bind(email)
+    .bind(name)
+    .bind(picture)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn update_user_login_profile(
+    pool: &DbPool,
+    user_id: Uuid,
+    name: Option<&str>,
+    picture: Option<&str>,
+    provider: Option<&str>,
+    provider_id: Option<&str>,
+    auth_method: Option<&str>,
+    platform: Option<&str>,
+    email_verified_at: Option<chrono::DateTime<Utc>>,
+) -> anyhow::Result<User> {
+    let u = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE users SET
+            name = COALESCE($2, users.name),
+            picture = COALESCE($3, users.picture),
+            provider = COALESCE($4, users.provider),
+            provider_id = COALESCE($5, users.provider_id),
+            auth_method = COALESCE($6, users.auth_method),
+            last_login_at = NOW(),
+            last_login_platform = COALESCE($7, users.last_login_platform),
+            email_verified_at = COALESCE($8, users.email_verified_at),
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, email, name, picture, provider, provider_id, auth_method, created_at,
+                  updated_at, last_login_at, last_login_platform, email_verified_at
+        "#,
+    )
+    .bind(user_id)
+    .bind(name)
+    .bind(picture)
+    .bind(provider)
+    .bind(provider_id)
+    .bind(auth_method)
+    .bind(platform)
+    .bind(email_verified_at)
+    .fetch_one(pool)
+    .await?;
+    Ok(u)
+}
+
+pub async fn list_user_auth_provider_names(
+    pool: &DbPool,
+    user_id: Uuid,
+) -> anyhow::Result<Vec<String>> {
+    let providers = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT provider
+        FROM user_auth_providers
+        WHERE user_id = $1
+        UNION
+        SELECT 'passkey'
+        WHERE EXISTS (
+            SELECT 1
+            FROM webauthn_credentials
+            WHERE user_id = $1
+        )
+        ORDER BY provider
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(providers)
+}
+
 #[derive(sqlx::FromRow, Clone)]
 pub struct Session {
     pub id: Uuid,

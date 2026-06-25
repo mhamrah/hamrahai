@@ -103,7 +103,7 @@ struct SettingsView: View {
                 LabeledContent("User ID", value: user.id)
                 LabeledContent("Email", value: user.email)
                 LabeledContent("Name", value: user.name ?? "Not provided")
-                LabeledContent("Auth Method", value: user.authMethod.capitalized)
+                LabeledContent("Last Sign-In", value: user.authMethod.capitalized)
                 LabeledContent("Member Since", value: formatDate(user.createdAt ?? ""))
 
                 // Sign Out action moved here for visibility
@@ -121,22 +121,22 @@ struct SettingsView: View {
     private var authProvidersSection: some View {
         Section("Authentication Providers") {
             if let user = authManager.currentUser {
-                // Show current auth method
-                HStack {
-                    Image(systemName: authProviderIcon(user.authMethod))
-                        .foregroundColor(authProviderColor(user.authMethod))
-                        .frame(width: 24)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Current: \(user.authMethod.capitalized)")
-                            .font(.subheadline)
-                        Text("Signed in with \(user.authMethod)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                ForEach(linkedAuthProviders(for: user), id: \.self) { provider in
+                    HStack {
+                        Image(systemName: authProviderIcon(provider))
+                            .foregroundColor(authProviderColor(provider))
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(provider.capitalized)
+                                .font(.subheadline)
+                            Text(provider == user.authMethod ? "Last used to sign in" : "Linked")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
 
-                // Add additional auth providers
-                if user.authMethod != "google" {
+                if !isAuthProviderLinked("google", for: user) {
                     Button(action: {
                         addGoogleSignIn()
                     }) {
@@ -156,7 +156,7 @@ struct SettingsView: View {
                     }
                 }
 
-                if user.authMethod != "apple" {
+                if !isAuthProviderLinked("apple", for: user) {
                     Button(action: {
                         Task { await authManager.signInWithApple() }
                     }) {
@@ -642,6 +642,19 @@ struct SettingsView: View {
         }
     }
 
+    private func linkedAuthProviders(for user: NativeAuthManager.HamrahUser) -> [String] {
+        let providers = user.authProviders.isEmpty ? [user.authMethod] : user.authProviders
+        let withPasskey = passkeys.isEmpty ? providers : providers + ["passkey"]
+        return Array(Set(withPasskey.map { $0.lowercased() })).sorted()
+    }
+
+    private func isAuthProviderLinked(
+        _ provider: String,
+        for user: NativeAuthManager.HamrahUser
+    ) -> Bool {
+        linkedAuthProviders(for: user).contains(provider.lowercased())
+    }
+
     private func addGoogleSignIn() {
         errorMessage = nil
         guard authManager.googleSignInStatus.isAvailable else {
@@ -662,10 +675,10 @@ struct SettingsView: View {
         // Debug authentication state
         print("🔍 MyAccountView Authentication Debug:")
         print("  Current User present: \(authManager.currentUser != nil)")
-        print("  Access Token: \(authManager.accessToken != nil ? "present" : "nil")")
+        print("  Access Token: \(accessToken() != nil ? "present" : "nil")")
         print("  Is Authenticated: \(authManager.isAuthenticated)")
 
-        guard let accessToken = authManager.accessToken else {
+        guard let accessToken = accessToken() else {
             passkeysLoadMessage = "Sign in to view passkeys."
             if showAlertOnFailure {
                 errorMessage = "Not authenticated. Please sign in again."
@@ -703,7 +716,7 @@ struct SettingsView: View {
     }
 
     private func removePasskey(_ credential: PasskeyCredential) {
-        guard let accessToken = authManager.accessToken else { return }
+        guard let accessToken = accessToken() else { return }
 
         Task {
             do {

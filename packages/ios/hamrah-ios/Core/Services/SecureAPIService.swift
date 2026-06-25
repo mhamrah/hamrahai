@@ -26,7 +26,8 @@ class SecureAPIService: ObservableObject {
         accessToken: String?,
         responseType: T.Type,
         customBaseURL: String? = nil,
-        isRetry: Bool = false
+        isRetry: Bool = false,
+        didRefreshAccessToken: Bool = false
     ) async throws -> T {
         let targetBaseURL = customBaseURL ?? baseURL
         let url = URL(string: "\(targetBaseURL)\(endpoint)")!
@@ -70,8 +71,25 @@ class SecureAPIService: ObservableObject {
             throw APIError.invalidResponse
         }
 
-        // Handle authentication errors with attestation retry
+        // Handle expired access tokens before treating a 401 as an attestation problem.
         if httpResponse.statusCode == 401 {
+            if !didRefreshAccessToken,
+                let refreshedToken = await refreshStoredAccessToken(),
+                refreshedToken != accessToken
+            {
+                print("✅ Access token refreshed, retrying request")
+                return try await makeSecureRequest(
+                    endpoint: endpoint,
+                    method: method,
+                    body: body,
+                    accessToken: refreshedToken,
+                    responseType: responseType,
+                    customBaseURL: customBaseURL,
+                    isRetry: false,
+                    didRefreshAccessToken: true
+                )
+            }
+
             // On 401, attempt to re-initialize attestation once
             if !isRetry, let token = accessToken {
                 print("⚠️ 401 Unauthorized - Attempting to re-initialize attestation")
@@ -91,7 +109,8 @@ class SecureAPIService: ObservableObject {
                         accessToken: accessToken,
                         responseType: responseType,
                         customBaseURL: customBaseURL,
-                        isRetry: true  // Prevent infinite retry loop
+                        isRetry: true,  // Prevent infinite retry loop
+                        didRefreshAccessToken: didRefreshAccessToken
                     )
                 } catch {
                     print("❌ Attestation re-initialization failed: \(error)")
@@ -485,6 +504,53 @@ class SecureAPIService: ObservableObject {
         }
     }
 
+    private func refreshStoredAccessToken() async -> String? {
+        guard let refreshToken = KeychainManager.shared.retrieveString(for: "hamrah_refresh_token")
+        else {
+            print("🔄 No refresh token available for 401 recovery")
+            return nil
+        }
+
+        guard let url = URL(string: "\(baseURL)/api/auth/tokens/refresh") else {
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = HTTPMethod.POST.rawValue
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("hamrah-ios", forHTTPHeaderField: "X-Requested-With")
+
+        do {
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: ["refresh_token": refreshToken]
+            )
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                httpResponse.statusCode == 200
+            else {
+                print(
+                    "🔄 Token refresh during API request failed with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)"
+                )
+                return nil
+            }
+
+            let tokenResponse = try JSONDecoder().decode(TokenRefreshResponse.self, from: data)
+            _ = KeychainManager.shared.store(
+                tokenResponse.accessToken, for: "hamrah_access_token")
+            _ = KeychainManager.shared.store(
+                tokenResponse.refreshToken, for: "hamrah_refresh_token")
+            _ = KeychainManager.shared.store(
+                Date().timeIntervalSince1970, for: "hamrah_auth_timestamp")
+            _ = KeychainManager.shared.store(
+                Date().timeIntervalSince1970 + TimeInterval(tokenResponse.expiresIn),
+                for: "hamrah_token_expires_at")
+            return tokenResponse.accessToken
+        } catch {
+            print("🔄 Token refresh during API request failed: \(error)")
+            return nil
+        }
+    }
+
     static func isRecoverableAttestationError(_ error: Error) -> Bool {
         #if os(iOS)
             if let dcError = error as? DCError {
@@ -526,6 +592,18 @@ class SecureAPIService: ObservableObject {
             base64.append(String(repeating: "=", count: padding))
         }
         return Data(base64Encoded: base64)
+    }
+}
+
+private struct TokenRefreshResponse: Decodable {
+    let accessToken: String
+    let refreshToken: String
+    let expiresIn: Int
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
     }
 }
 
