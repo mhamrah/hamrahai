@@ -45,6 +45,10 @@ struct SettingsView: View {
         availableModels.filter(\.isAvailable).map(\.id)
     }
 
+    private var canAttemptServerSync: Bool {
+        authManager.isAuthenticated && authManager.hasValidStoredTokens()
+    }
+
     var body: some View {
         Form {
             userInfoSection
@@ -298,8 +302,7 @@ struct SettingsView: View {
                 showAddPasskey = true
             }
             .font(.caption)
-            .disabled(
-                isLoading || authManager.currentUser == nil || authManager.accessToken == nil)
+            .disabled(isLoading || authManager.currentUser == nil || !canAttemptServerSync)
         }
         .sheet(isPresented: $showAddPasskey) {
             AddPasskeyView(onPasskeyAdded: {
@@ -320,9 +323,9 @@ struct SettingsView: View {
                     ProgressView().controlSize(.small)
                 }
                 Button("Load From Server") { Task { await loadFromServer() } }
-                    .disabled(isLoading || accessToken() == nil)
+                    .disabled(isLoading || !canAttemptServerSync)
                 Button("Save To Server") { Task { await saveToServer() } }
-                    .disabled(isSaving || accessToken() == nil)
+                    .disabled(isSaving || !canAttemptServerSync)
             }
             .buttonStyle(.bordered)
 
@@ -330,7 +333,7 @@ struct SettingsView: View {
                 Text(info).font(.footnote).foregroundStyle(.secondary)
             }
 
-            if accessToken() == nil {
+            if !canAttemptServerSync {
                 Text("Sign in to sync preferences with your account.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -420,7 +423,7 @@ struct SettingsView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(syncEngine.isSyncingNow || accessToken() == nil)
+            .disabled(syncEngine.isSyncingNow || !canAttemptServerSync)
 
             LabeledContent("Queued", value: "\(syncEngine.queuedLinkCount)")
             if let lastSyncAt = syncEngine.lastSyncAt {
@@ -501,14 +504,14 @@ struct SettingsView: View {
 
     private func loadFromServerIfEmpty() async {
         // Load once from server if we have no server values yet
-        if accessToken() == nil { return }
+        if !canAttemptServerSync { return }
         if !preferredModels.isEmpty || defaultModel != SettingsModelCatalog.defaultModelId { return }
         await loadFromServer()
     }
 
     private func loadFromServer() async {
-        guard let token = accessToken() else {
-            infoMessage = "Not signed in."
+        guard let token = await accessTokenForServerRequest() else {
+            infoMessage = "Session expired. Please sign in again."
             return
         }
         isLoading = true
@@ -533,8 +536,8 @@ struct SettingsView: View {
     }
 
     private func saveToServer() async {
-        guard let token = accessToken() else {
-            infoMessage = "Not signed in."
+        guard let token = await accessTokenForServerRequest() else {
+            infoMessage = "Session expired. Please sign in again."
             return
         }
         isSaving = true
@@ -567,7 +570,7 @@ struct SettingsView: View {
         // Try a best-effort fetch. If missing, keep local defaults.
         do {
             struct CatalogResponse: Codable { let models: [AIModelDTO] }
-            let token = accessToken()
+            let token = await accessTokenForServerRequest()
             let resp: CatalogResponse = try await SecureAPIService.shared.get(
                 endpoint: "/v1/models",
                 accessToken: token,
@@ -597,8 +600,8 @@ struct SettingsView: View {
         infoMessage = "API prompt copied to clipboard."
     }
 
-    private func accessToken() -> String? {
-        KeychainManager.shared.retrieveString(for: "hamrah_access_token")
+    private func accessTokenForServerRequest() async -> String? {
+        await authManager.accessTokenForServerRequest()
     }
 
     private func mapDTOToState(_ dto: UserPrefsDTO) {
@@ -665,47 +668,62 @@ struct SettingsView: View {
         print("  Access Token: \(authManager.accessToken != nil ? "present" : "nil")")
         print("  Is Authenticated: \(authManager.isAuthenticated)")
 
-        guard let accessToken = authManager.accessToken else {
-            passkeysLoadMessage = "Sign in to view passkeys."
-            if showAlertOnFailure {
-                errorMessage = "Not authenticated. Please sign in again."
-                showErrorAlert = true
-            }
-            return
-        }
-
-        isLoading = true
-        passkeysLoadMessage = nil
-        if showAlertOnFailure {
-            errorMessage = nil
-        }
-
         Task {
-            do {
-                let credentials = try await fetchPasskeys(accessToken: accessToken)
+            guard let accessToken = await accessTokenForServerRequest() else {
                 await MainActor.run {
-                    self.passkeys = credentials
-                    self.passkeysLoadMessage = nil
-                    self.isLoading = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.passkeys = []
-                    self.passkeysLoadMessage = "Passkeys couldn't be loaded right now."
+                    passkeysLoadMessage = "Sign in to view passkeys."
                     if showAlertOnFailure {
-                        self.errorMessage = "Failed to load passkeys: \(error.localizedDescription)"
-                        self.showErrorAlert = true
+                        errorMessage = "Session expired. Please sign in again."
+                        showErrorAlert = true
                     }
-                    self.isLoading = false
                 }
+                return
+            }
+
+            await loadPasskeys(accessToken: accessToken, showAlertOnFailure: showAlertOnFailure)
+        }
+    }
+
+    private func loadPasskeys(accessToken: String, showAlertOnFailure: Bool) async {
+        await MainActor.run {
+            isLoading = true
+            passkeysLoadMessage = nil
+            if showAlertOnFailure {
+                errorMessage = nil
+            }
+        }
+
+        do {
+            let credentials = try await fetchPasskeys(accessToken: accessToken)
+            await MainActor.run {
+                self.passkeys = credentials
+                self.passkeysLoadMessage = nil
+                self.isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                self.passkeys = []
+                self.passkeysLoadMessage = "Passkeys couldn't be loaded right now."
+                if showAlertOnFailure {
+                    self.errorMessage = "Failed to load passkeys: \(error.localizedDescription)"
+                    self.showErrorAlert = true
+                }
+                self.isLoading = false
             }
         }
     }
 
     private func removePasskey(_ credential: PasskeyCredential) {
-        guard let accessToken = authManager.accessToken else { return }
-
         Task {
+            guard let accessToken = await accessTokenForServerRequest() else {
+                await MainActor.run {
+                    errorMessage = "Session expired. Please sign in again."
+                    showErrorAlert = true
+                    credentialToDelete = nil
+                }
+                return
+            }
+
             do {
                 try await deletePasskey(credentialId: credential.id, accessToken: accessToken)
                 await MainActor.run {
@@ -777,10 +795,7 @@ struct SettingsView: View {
     }
 
     private func runHealthSync() async {
-        if authManager.isTokenExpiringSoon() {
-            _ = await authManager.refreshToken()
-        }
-        if let token = authManager.accessToken ?? accessToken() {
+        if let token = await accessTokenForServerRequest() {
             await SecureAPIService.shared.initializeAttestation(accessToken: token)
         }
         await syncEngine.runSyncNow(reason: "settings_manual_sync")

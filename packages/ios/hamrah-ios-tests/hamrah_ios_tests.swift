@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftData
 import Testing
 @testable import hamrah_ios
 
@@ -15,6 +16,21 @@ import Testing
 
 @MainActor
 struct hamrah_ios_tests {
+
+    final class MockLinkAPI: LinkAPI {
+        var capturedPostTokens: [String?] = []
+        var capturedGetTokens: [String?] = []
+
+        func postLink(payload: OutboundLinkPayload, token: String?) async throws -> PostLinkResponse {
+            capturedPostTokens.append(token)
+            return PostLinkResponse(serverId: payload.clientId, canonicalUrl: payload.url)
+        }
+
+        func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse {
+            capturedGetTokens.append(token)
+            return DeltaResponse(links: [], nextCursor: nil)
+        }
+    }
 
     @Test func example() async throws {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.
@@ -183,6 +199,39 @@ struct hamrah_ios_tests {
         #expect(headers["X-App-Attestation-Mode"] == "none")
         #expect(headers["X-iOS-Bundle-ID"] == "app.hamrah.ios")
         #expect(headers["X-iOS-App-Version"] == "1.2.3")
+    }
+
+    @Test func syncUsesRefreshedAccessTokenForOutboundAndInboundRequests() async throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: LinkEntity.self, TagEntity.self, SyncCursor.self, UserPrefs.self,
+            configurations: config
+        )
+        let context = container.mainContext
+        let url = URL(string: "https://example.com/refresh")!
+        let link = LinkEntity(
+            originalUrl: url,
+            canonicalUrl: url,
+            sharedAt: Date(),
+            status: "queued",
+            updatedAt: Date(),
+            createdAt: Date()
+        )
+        context.insert(link)
+        try context.save()
+
+        let api = MockLinkAPI()
+        let engine = SyncEngine(
+            api: api,
+            modelContainer: container,
+            accessTokenProvider: { "stale-token" },
+            accessTokenRefresher: { "fresh-token" }
+        )
+
+        await engine._testRunSyncNow(reason: "test_refreshed_token")
+
+        #expect(api.capturedPostTokens == ["fresh-token"])
+        #expect(api.capturedGetTokens == ["fresh-token"])
     }
 
 }

@@ -20,6 +20,7 @@ final class SyncEngine: ObservableObject {
     private let api: LinkAPI
     private let modelContainer: ModelContainer
     private let accessTokenProvider: () -> String?
+    private var accessTokenRefresher: (() async -> String?)?
 
     private let logger = Logger(subsystem: "app.hamrah.ios", category: "SyncEngine")
 
@@ -60,11 +61,13 @@ final class SyncEngine: ObservableObject {
         modelContainer: ModelContainer,
         accessTokenProvider: @escaping () -> String? = {
             KeychainManager.shared.retrieveString(for: "hamrah_access_token")
-        }
+        },
+        accessTokenRefresher: (() async -> String?)? = nil
     ) {
         self.api = api
         self.modelContainer = modelContainer
         self.accessTokenProvider = accessTokenProvider
+        self.accessTokenRefresher = accessTokenRefresher
 
         setupPathMonitor()
     }
@@ -85,6 +88,11 @@ final class SyncEngine: ObservableObject {
     /// Immediately runs a full sync on the current task; awaits completion.
     func runSyncNow(reason: String = "manual") async {
         await performSync(reason: reason)
+    }
+
+    @MainActor
+    func setAccessTokenRefresher(_ refresher: @escaping () async -> String?) {
+        accessTokenRefresher = refresher
     }
 
     /// Call from BGProcessingTask (background fetch).
@@ -120,7 +128,7 @@ final class SyncEngine: ObservableObject {
             isSyncingNow = false
         }
 
-        guard accessToken() != nil else {
+        guard let token = await accessToken() else {
             logger.info("Skipping sync; no access token available. reason=\(reason, privacy: .public)")
             lastSyncError = "Sign in to sync."
             return
@@ -130,8 +138,8 @@ final class SyncEngine: ObservableObject {
         queuedLinkCount = queuedLinks(context).count
         logger.info("Starting sync; reason=\(reason, privacy: .public)")
 
-        await syncOutboundLinks(context: context)
-        await syncInboundLinks(context: context)
+        await syncOutboundLinks(context: context, token: token)
+        await syncInboundLinks(context: context, token: token)
         queuedLinkCount = queuedLinks(context).count
         lastSyncAt = Date()
 
@@ -173,17 +181,20 @@ final class SyncEngine: ObservableObject {
         link.updatedAt = Date()
     }
 
-    private func accessToken() -> String? {
-        accessTokenProvider()
+    private func accessToken() async -> String? {
+        if let accessTokenRefresher {
+            return await accessTokenRefresher()
+        }
+
+        return accessTokenProvider()
     }
 
     private func currentPrefs(_ context: ModelContext) -> UserPrefs? {
         (try? context.fetch(FetchDescriptor<UserPrefs>()))?.first
     }
 
-    private func syncOutboundLinks(context: ModelContext) async {
+    private func syncOutboundLinks(context: ModelContext, token: String) async {
         let prefs = currentPrefs(context)
-        let token = accessToken()  // may be nil; API layer should handle 401 appropriately
 
         for link in queuedLinks(context) {
             do {
@@ -209,10 +220,9 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Inbound
 
-    private func syncInboundLinks(context: ModelContext) async {
+    private func syncInboundLinks(context: ModelContext, token: String) async {
         let cursor = SyncCursor.fetchOrCreateSingleton(in: context)
         let since = cursor.lastUpdatedCursor ?? ""
-        let token = accessToken()
 
         do {
             let delta = try await api.getLinks(since: since, limit: 100, token: token)
