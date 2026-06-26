@@ -47,6 +47,8 @@ final class SessionManager {
 
     private let keychain: KeychainManager
     private let urlSession: URLSession
+    private let refreshLock = NSLock()
+    private var refreshTask: Task<Bool, Never>?
 
     private var baseURL: String {
         APIConfiguration.shared.baseURL
@@ -92,6 +94,8 @@ final class SessionManager {
         _ = keychain.store(accessToken, for: "hamrah_access_token")
         if let refreshToken {
             _ = keychain.store(refreshToken, for: "hamrah_refresh_token")
+        } else {
+            _ = keychain.delete(for: "hamrah_refresh_token")
         }
         _ = keychain.store(Date().timeIntervalSince1970, for: "hamrah_auth_timestamp")
         if let expiresIn {
@@ -99,6 +103,8 @@ final class SessionManager {
                 Date().timeIntervalSince1970 + TimeInterval(expiresIn),
                 for: "hamrah_token_expires_at"
             )
+        } else {
+            _ = keychain.delete(for: "hamrah_token_expires_at")
         }
         _ = keychain.store(true, for: "hamrah_is_authenticated")
     }
@@ -122,6 +128,26 @@ final class SessionManager {
     }
 
     func refreshAccessToken() async -> Bool {
+        refreshLock.lock()
+        if let refreshTask {
+            refreshLock.unlock()
+            return await refreshTask.value
+        }
+
+        let task = Task { await self.performRefreshAccessToken() }
+        refreshTask = task
+        refreshLock.unlock()
+
+        let result = await task.value
+
+        refreshLock.lock()
+        refreshTask = nil
+        refreshLock.unlock()
+
+        return result
+    }
+
+    private func performRefreshAccessToken() async -> Bool {
         guard let refreshToken = keychain.retrieveString(for: "hamrah_refresh_token") else {
             return false
         }
@@ -304,13 +330,15 @@ final class HamrahAPIClient {
     ) async throws -> Response {
         let requestBody = try encodeBody(body)
         let targetBaseURL = customBaseURL ?? baseURL
-        guard let url = URL(string: "\(targetBaseURL)\(endpoint)") else {
+        guard let url = buildURL(baseURL: targetBaseURL, endpoint: endpoint) else {
             throw HamrahAPIError.invalidRequest("Invalid URL for \(endpoint)")
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = method.rawValue
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if requestBody != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         request.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Trace-Id")
 
         let accessToken = try await token(for: auth)
@@ -354,6 +382,14 @@ final class HamrahAPIClient {
                 responseType: responseType,
                 retryState: retryState
             )
+        }
+
+        if httpResponse.statusCode == 403 {
+            if auth == .required || auth == .bootstrap {
+                sessionManager.clearSession()
+                throw HamrahAPIError.sessionExpired
+            }
+            throw HamrahAPIError.unauthorized
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
@@ -423,6 +459,16 @@ final class HamrahAPIClient {
         case .required, .bootstrap:
             return try await sessionManager.accessTokenForRequest()
         }
+    }
+
+    private func buildURL(baseURL: String, endpoint: String) -> URL? {
+        if let absoluteURL = URL(string: endpoint), absoluteURL.scheme != nil {
+            return absoluteURL
+        }
+
+        let trimmedBase = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
+        let trimmedEndpoint = endpoint.hasPrefix("/") ? String(endpoint.dropFirst()) : endpoint
+        return URL(string: "\(trimmedBase)/\(trimmedEndpoint)")
     }
 
     private func encodeBody(_ body: Encodable?) throws -> Data? {

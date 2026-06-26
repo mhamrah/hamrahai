@@ -749,13 +749,18 @@ class NativeAuthManager: NSObject, ObservableObject {
         }
 
         do {
-            let _: APIResponse = try await HamrahAPIClient.shared.get(
+            let validation: TokenValidationResponse = try await HamrahAPIClient.shared.get(
                 "/api/auth/tokens/validate",
                 auth: .required,
-                responseType: APIResponse.self
+                responseType: TokenValidationResponse.self
             )
-            print("🔍 Token validation successful")
-            return true
+            if validation.valid {
+                print("🔍 Token validation successful")
+                return true
+            }
+            print("🔍 Token validation failed: token is invalid")
+            await MainActor.run { logout() }
+            return false
         } catch {
             if let apiError = error as? HamrahAPIError {
                 switch apiError {
@@ -769,6 +774,10 @@ class NativeAuthManager: NSObject, ObservableObject {
             print("🔍 Token validation error: \(error), assuming valid")
             return true
         }
+    }
+
+    private struct TokenValidationResponse: Decodable {
+        let valid: Bool
     }
 
     // MARK: - Token Refresh

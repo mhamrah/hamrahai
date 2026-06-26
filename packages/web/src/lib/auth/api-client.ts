@@ -103,10 +103,12 @@ export class HamrahApiClient {
     const auth = options.auth ?? "required";
     const cookieHeader = this.event?.request.headers.get("cookie") ?? null;
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
       ...csrfHeader(method, cookieHeader),
       ...(options.headers as Record<string, string> | undefined),
     };
+    if (options.body !== undefined && headers["Content-Type"] === undefined) {
+      headers["Content-Type"] = "application/json";
+    }
 
     // Forward cookies for SSR (if present)
     if (auth !== "none" && cookieHeader) {

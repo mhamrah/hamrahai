@@ -201,6 +201,11 @@ struct hamrah_ios_tests {
         #expect(headers["X-iOS-App-Version"] == "1.2.3")
     }
 
+    @Test func passkeyPathComponentsCannotEscapeTheirRouteSegment() {
+        #expect(PasskeyAPI.pathComponent("user/with/slash") == "user%2Fwith%2Fslash")
+        #expect(PasskeyAPI.pathComponent("credential?id=1") == "credential%3Fid%3D1")
+    }
+
     @Test func syncDomainApiDoesNotExposeAccessTokenArguments() async throws {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(

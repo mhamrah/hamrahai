@@ -54,6 +54,7 @@ describe("HamrahApiClient", () => {
       expect.objectContaining({
         credentials: "include",
         headers: expect.not.objectContaining({
+          "Content-Type": "application/json",
           "X-CSRF-Token": "csrf-token",
         }),
         method: "GET",
@@ -73,6 +74,53 @@ describe("HamrahApiClient", () => {
         credentials: "include",
         headers: expect.objectContaining({
           "X-CSRF-Token": "csrf-token",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("attaches JSON content type when a request has a body", async () => {
+    vi.stubGlobal("document", { cookie: "csrf_token=csrf-token" });
+    const client = new HamrahApiClient(undefined, "https://api.hamrah.app");
+
+    await client.post("/api/auth/native", { provider: "google" });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.hamrah.app/api/auth/native",
+      expect.objectContaining({
+        body: JSON.stringify({ provider: "google" }),
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "csrf-token",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("does not forward SSR cookies for no-auth API calls", async () => {
+    const event = {
+      request: new Request("https://hamrah.app/", {
+        headers: {
+          cookie: "session=session-token; csrf_token=ssr-csrf-token",
+        },
+      }),
+    } as any;
+    const client = new HamrahApiClient(event, "https://api.hamrah.app");
+
+    await client.nativeAuth({
+      provider: "google",
+      platform: "web",
+      id_token: "id-token",
+    } as any);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.hamrah.app/api/auth/native",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.not.objectContaining({
+          cookie: "session=session-token; csrf_token=ssr-csrf-token",
         }),
         method: "POST",
       }),
