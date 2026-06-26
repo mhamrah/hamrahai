@@ -18,16 +18,16 @@ import Testing
 struct hamrah_ios_tests {
 
     final class MockLinkAPI: LinkAPI {
-        var capturedPostTokens: [String?] = []
-        var capturedGetTokens: [String?] = []
+        var postCallCount = 0
+        var getCallCount = 0
 
-        func postLink(payload: OutboundLinkPayload, token: String?) async throws -> PostLinkResponse {
-            capturedPostTokens.append(token)
+        func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse {
+            postCallCount += 1
             return PostLinkResponse(serverId: payload.clientId, canonicalUrl: payload.url)
         }
 
-        func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse {
-            capturedGetTokens.append(token)
+        func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
+            getCallCount += 1
             return DeltaResponse(links: [], nextCursor: nil)
         }
     }
@@ -43,14 +43,14 @@ struct hamrah_ios_tests {
                 code: DCError.Code.invalidInput.rawValue
             )
 
-            #expect(SecureAPIService.isRecoverableAttestationError(error))
+            #expect(HamrahAPIClient.isRecoverableAttestationError(error))
         #endif
     }
 
     @Test func appAttestationKeyGenerationFailureIsRecoverable() {
         #if os(iOS)
             #expect(
-                SecureAPIService.isRecoverableAttestationError(
+                HamrahAPIClient.isRecoverableAttestationError(
                     AttestationError.keyGenerationFailed("Key invalidated")
                 )
             )
@@ -60,7 +60,7 @@ struct hamrah_ios_tests {
     @Test func unrelatedErrorIsNotRecoverableForAttestationRetry() {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
 
-        #expect(!SecureAPIService.isRecoverableAttestationError(error))
+        #expect(!HamrahAPIClient.isRecoverableAttestationError(error))
     }
 
     @MainActor
@@ -164,9 +164,9 @@ struct hamrah_ios_tests {
                 code: DCError.Code.unknownSystemFailure.rawValue
             )
 
-            #expect(SecureAPIService.isRecoverableAttestationError(error))
+            #expect(HamrahAPIClient.isRecoverableAttestationError(error))
             #expect(
-                SecureAPIService.attestationFailureStrategy(
+                HamrahAPIClient.attestationFailureStrategy(
                     for: error,
                     accessToken: "access-token"
                 ) == .recoverThenFallback
@@ -182,7 +182,7 @@ struct hamrah_ios_tests {
             )
 
             #expect(
-                SecureAPIService.attestationFailureStrategy(
+                HamrahAPIClient.attestationFailureStrategy(
                     for: error,
                     accessToken: nil
                 ) == .fallback
@@ -191,7 +191,7 @@ struct hamrah_ios_tests {
     }
 
     @Test func fallbackAttestationHeadersMatchServerBypassContract() {
-        let headers = SecureAPIService.fallbackAttestationHeaders(
+        let headers = HamrahAPIClient.fallbackAttestationHeaders(
             bundleIdentifier: "app.hamrah.ios",
             appVersion: "1.2.3"
         )
@@ -201,7 +201,7 @@ struct hamrah_ios_tests {
         #expect(headers["X-iOS-App-Version"] == "1.2.3")
     }
 
-    @Test func syncUsesRefreshedAccessTokenForOutboundAndInboundRequests() async throws {
+    @Test func syncDomainApiDoesNotExposeAccessTokenArguments() async throws {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
             for: LinkEntity.self, TagEntity.self, SyncCursor.self, UserPrefs.self,
@@ -223,15 +223,13 @@ struct hamrah_ios_tests {
         let api = MockLinkAPI()
         let engine = SyncEngine(
             api: api,
-            modelContainer: container,
-            accessTokenProvider: { "stale-token" },
-            accessTokenRefresher: { "fresh-token" }
+            modelContainer: container
         )
 
-        await engine._testRunSyncNow(reason: "test_refreshed_token")
+        await engine._testRunSyncNow(reason: "test_domain_api_without_token_surface")
 
-        #expect(api.capturedPostTokens == ["fresh-token"])
-        #expect(api.capturedGetTokens == ["fresh-token"])
+        #expect(api.postCallCount == 1)
+        #expect(api.getCallCount == 1)
     }
 
 }

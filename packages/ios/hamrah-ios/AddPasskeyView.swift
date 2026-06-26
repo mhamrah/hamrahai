@@ -112,18 +112,12 @@ struct AddPasskeyView: View {
             return
         }
 
-        guard let accessToken = authManager.accessToken else {
-            errorMessage = "No access token found. Please sign in again."
-            showErrorAlert = true
-            return
-        }
-
         isLoading = true
         errorMessage = nil
 
         Task {
             do {
-                try await registerPasskey(email: user.email, accessToken: accessToken)
+                try await registerPasskey(email: user.email)
                 await MainActor.run {
                     self.isLoading = false
                     self.onPasskeyAdded()
@@ -139,10 +133,9 @@ struct AddPasskeyView: View {
         }
     }
 
-    private func registerPasskey(email: String, accessToken: String) async throws {
+    private func registerPasskey(email: String) async throws {
         // Step 1: Begin WebAuthn registration
-        let beginOptions = try await beginWebAuthnRegistration(
-            email: email, accessToken: accessToken)
+        let beginOptions = try await beginWebAuthnRegistration(email: email)
 
         guard let options = beginOptions.options else {
             throw NSError(
@@ -157,25 +150,23 @@ struct AddPasskeyView: View {
 
         // Step 3: Verify registration with backend
         try await completeWebAuthnRegistration(
-            attestation: attestation, challengeId: challengeId, email: email,
-            accessToken: accessToken)
+            attestation: attestation, challengeId: challengeId)
     }
 
-    private func beginWebAuthnRegistration(email: String, accessToken: String) async throws
+    private func beginWebAuthnRegistration(email: String) async throws
         -> WebAuthnBeginRegistrationResponse
     {
-        let body = [
-            "user_id": authManager.currentUser?.id ?? "",
-            "email": email,
-            "display_name": authManager.currentUser?.name ?? email,
-        ]
+        let body = WebAuthnBeginRegistrationRequest(
+            user_id: authManager.currentUser?.id ?? "",
+            email: email,
+            display_name: authManager.currentUser?.name ?? email
+        )
 
-        return try await SecureAPIService.shared.post(
-            endpoint: "/api/webauthn/register/begin",
+        return try await HamrahAPIClient.shared.post(
+            "/api/webauthn/register/begin",
             body: body,
-            accessToken: accessToken,
-            responseType: WebAuthnBeginRegistrationResponse.self,
-            customBaseURL: APIConfiguration.shared.baseURL
+            auth: .required,
+            responseType: WebAuthnBeginRegistrationResponse.self
         )
     }
 
@@ -204,34 +195,29 @@ struct AddPasskeyView: View {
     }
 
     private func completeWebAuthnRegistration(
-        attestation: ASAuthorizationPlatformPublicKeyCredentialRegistration, challengeId: String,
-        email: String, accessToken: String
+        attestation: ASAuthorizationPlatformPublicKeyCredentialRegistration, challengeId: String
     ) async throws {
         // Create the response object matching SimpleWebAuthn's RegistrationResponseJSON format
-        let registrationResponseData =
-            [
-                "id": attestation.credentialID.base64URLEncodedString(),
-                "rawId": attestation.credentialID.base64URLEncodedString(),
-                "type": "public-key",
-                "response": [
-                    "attestationObject": attestation.rawAttestationObject?.base64URLEncodedString()
-                        ?? "",
-                    "clientDataJSON": attestation.rawClientDataJSON.base64URLEncodedString(),
-                ],
-            ] as [String: Any]
+        let response = WebAuthnRegistrationCredential(
+            id: attestation.credentialID.base64URLEncodedString(),
+            rawId: attestation.credentialID.base64URLEncodedString(),
+            type: "public-key",
+            response: WebAuthnRegistrationCredentialResponse(
+                attestationObject: attestation.rawAttestationObject?.base64URLEncodedString()
+                    ?? "",
+                clientDataJSON: attestation.rawClientDataJSON.base64URLEncodedString()
+            )
+        )
+        let body = WebAuthnCompleteRegistrationRequest(
+            response: response,
+            challenge_id: challengeId
+        )
 
-        let body =
-            [
-                "response": registrationResponseData,
-                "challenge_id": challengeId,
-            ] as [String: Any]
-
-        _ = try await SecureAPIService.shared.post(
-            endpoint: "/api/webauthn/register/verify",
+        _ = try await HamrahAPIClient.shared.post(
+            "/api/webauthn/register/verify",
             body: body,
-            accessToken: accessToken,
-            responseType: APIResponse.self,
-            customBaseURL: APIConfiguration.shared.baseURL
+            auth: .required,
+            responseType: APIResponse.self
         )
     }
 }
@@ -250,6 +236,29 @@ struct WebAuthnBeginRegistrationResponse: Codable {
         case challengeId = "challenge_id"
         case error
     }
+}
+
+struct WebAuthnBeginRegistrationRequest: Encodable {
+    let user_id: String
+    let email: String
+    let display_name: String
+}
+
+struct WebAuthnCompleteRegistrationRequest: Encodable {
+    let response: WebAuthnRegistrationCredential
+    let challenge_id: String
+}
+
+struct WebAuthnRegistrationCredential: Encodable {
+    let id: String
+    let rawId: String
+    let type: String
+    let response: WebAuthnRegistrationCredentialResponse
+}
+
+struct WebAuthnRegistrationCredentialResponse: Encodable {
+    let attestationObject: String
+    let clientDataJSON: String
 }
 
 struct PublicKeyCredentialCreationOptions: Codable {

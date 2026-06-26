@@ -1,9 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { HamrahApiClient } from "./api-client";
+import { ApiClientError, HamrahApiClient } from "./api-client";
 
 describe("HamrahApiClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -40,5 +41,80 @@ describe("HamrahApiClient", () => {
         method: "GET",
       }),
     );
+  });
+
+  it("does not attach CSRF to safe GET requests", async () => {
+    vi.stubGlobal("document", { cookie: "csrf_token=csrf-token" });
+    const client = new HamrahApiClient(undefined, "https://api.hamrah.app");
+
+    await client.get("/api/auth/sessions/validate");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.hamrah.app/api/auth/sessions/validate",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.not.objectContaining({
+          "X-CSRF-Token": "csrf-token",
+        }),
+        method: "GET",
+      }),
+    );
+  });
+
+  it("attaches CSRF to unsafe browser requests", async () => {
+    vi.stubGlobal("document", { cookie: "csrf_token=csrf-token" });
+    const client = new HamrahApiClient(undefined, "https://api.hamrah.app");
+
+    await client.post("/api/auth/sessions/logout");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.hamrah.app/api/auth/sessions/logout",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({
+          "X-CSRF-Token": "csrf-token",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("uses SSR cookies as the CSRF source for unsafe server requests", async () => {
+    const event = {
+      request: new Request("https://hamrah.app/", {
+        headers: {
+          cookie: "session=session-token; csrf_token=ssr-csrf-token",
+        },
+      }),
+    } as any;
+    const client = new HamrahApiClient(event, "https://api.hamrah.app");
+
+    await client.post("/api/auth/sessions/logout");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.hamrah.app/api/auth/sessions/logout",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({
+          cookie: "session=session-token; csrf_token=ssr-csrf-token",
+          "X-CSRF-Token": "ssr-csrf-token",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("maps required-auth 401s to session_expired errors", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: vi.fn().mockResolvedValue({ error: "Authentication required" }),
+    });
+    const client = new HamrahApiClient(undefined, "https://api.hamrah.app");
+
+    await expect(client.validateSession()).rejects.toMatchObject({
+      category: "session_expired",
+      status: 401,
+    } satisfies Partial<ApiClientError>);
   });
 });

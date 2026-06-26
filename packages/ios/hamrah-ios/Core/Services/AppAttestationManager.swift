@@ -72,7 +72,7 @@
                 print("  -> Step 1: Attestation key ready.")
 
                 // Step 2: Skip one-time attestation if local setup completed.
-                // If the server later rejects an assertion, SecureAPIService will recover once.
+                // If the server later rejects an assertion, HamrahAPIClient will recover once.
                 if keychain.retrieveString(for: "hamrah_attestation_completed") == "true" {
                     print("✅ App Attestation already initialized locally")
                     return

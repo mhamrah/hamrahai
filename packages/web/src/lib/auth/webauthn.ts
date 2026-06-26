@@ -181,6 +181,7 @@ export async function authenticateWithDiscoverablePasskey(): Promise<PasskeyAuth
       {
         explicit: true,
       },
+      { auth: "none" },
     );
 
     if (!beginResponse.success || !beginResponse.options) {
@@ -216,6 +217,7 @@ export async function authenticateWithDiscoverablePasskey(): Promise<PasskeyAuth
         mode: "discoverable-explicit",
         platform: "web",
       },
+      { auth: "none" },
     );
 
     if (!completeResponse.success) {

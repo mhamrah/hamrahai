@@ -39,36 +39,8 @@
  *    unsub();
  */
 
-import type {
-  ApiUserWire,
-  SessionValidationResponse,
-} from '@hamrah/shared';
-
-// CSRF double-submit configuration and helpers
-// Backend should set a non-HttpOnly CSRF cookie with this name.
-const CSRF_COOKIE_NAME = 'csrf_token';
-// Client echoes the cookie value in this header on unsafe methods.
-const CSRF_HEADER_NAME = 'X-CSRF-Token';
-
-/**
- * Read a cookie value by name (non-HttpOnly cookies only).
- */
-function readCookie(name: string): string | null {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie
-    .split(';')
-    .map((c) => c.trim())
-    .find((c) => c.startsWith(name + '='));
-  if (!match) return null;
-  return decodeURIComponent(match.split('=').slice(1).join('='));
-}
-
-/**
- * Get CSRF token from non-HttpOnly cookie (set by hamrah-api).
- */
-function getCsrfTokenFromCookie(): string | null {
-  return readCookie(CSRF_COOKIE_NAME);
-}
+import type { ApiUserWire } from "@hamrah/shared";
+import { createApiClient } from "./api-client";
 
 /* -------------------------------------------------------------------------- */
 /*                                Type Aliases                                */
@@ -86,17 +58,17 @@ export interface AuthSessionState {
 }
 
 export interface AuthEventLogin {
-  type: 'login';
+  type: "login";
   user: ApiUserWire;
 }
 
 export interface AuthEventLogout {
-  type: 'logout';
-  reason: 'explicit' | 'session_invalid' | 'network_error';
+  type: "logout";
+  reason: "explicit" | "session_invalid" | "network_error";
 }
 
 export interface AuthEventRefresh {
-  type: 'refresh';
+  type: "refresh";
   user: ApiUserWire | null;
 }
 
@@ -111,81 +83,6 @@ export interface ValidateOptions {
    * Reuse cached result if validated within this many milliseconds (default 10s).
    */
   maxAgeMs?: number;
-}
-
-/* -------------------------------------------------------------------------- */
-/*                            Internal Helper Logic                           */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Resolve hamrah-api base URL (mirrors logic in the existing api-client).
- * Prefers:
- *   1. window.__API_BASE (test overrides)
- *   2. Vite env VITE_API_BASE
- *   3. https://api.hamrah.app (production)
- *   4. http://localhost:8080 (dev heuristic)
- */
-function resolveApiBase(): string {
-  // Runtime override (tests / diagnostics)
-  if (typeof window !== 'undefined') {
-    const win = window as unknown as { __API_BASE?: string };
-    if (win.__API_BASE) return win.__API_BASE;
-  }
-
-  if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
-
-  if (typeof window !== 'undefined') {
-    const isLocal =
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1';
-    if (isLocal) {
-      return window.location.protocol === 'https:'
-        ? 'https://localhost:8080'
-        : 'http://localhost:8080';
-    }
-  }
-
-  return 'https://api.hamrah.app';
-}
-
-/**
- * Perform a JSON fetch with credentials included.
- */
-async function fetchJson<T>(
-  path: string,
-  init: RequestInit & { expectedStatuses?: number[] } = {},
-): Promise<{ ok: boolean; status: number; json: T | null }> {
-  const base = resolveApiBase();
-  const url = `${base}${path}`;
-  const fetchInit: RequestInit & { expectedStatuses?: number[] } = { ...init };
-  delete fetchInit.expectedStatuses;
-  delete fetchInit.headers;
-  // Build headers and attach CSRF token for unsafe methods if present
-  const method = (init.method || 'GET').toString().toUpperCase();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(init.headers as Record<string, string> | undefined),
-  };
-  if (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') {
-    const csrf = getCsrfTokenFromCookie();
-    if (csrf) {
-      headers[CSRF_HEADER_NAME] = csrf;
-    }
-  }
-
-  const resp = await fetch(url, {
-    ...fetchInit,
-    credentials: 'include',
-    headers,
-  });
-
-  let parsed: T | null = null;
-  try {
-    parsed = (await resp.json()) as T;
-  } catch {
-    // ignore JSON parse failures; treat as null
-  }
-  return { ok: resp.ok, status: resp.status, json: parsed };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -218,7 +115,7 @@ class AuthService {
         sub(event);
       } catch (e) {
         // eslint-disable-next-line no-console
-        console.error('AuthService subscriber error', e);
+        console.error("AuthService subscriber error", e);
       }
     }
   }
@@ -234,9 +131,7 @@ class AuthService {
    * Validate the current session via hamrah-api.
    * Applies caching unless force is true or stale.
    */
-  async validateSession(
-    opts: ValidateOptions = {},
-  ): Promise<AuthSessionState> {
+  async validateSession(opts: ValidateOptions = {}): Promise<AuthSessionState> {
     const { force = false, maxAgeMs = 10_000 } = opts;
     const now = Date.now();
 
@@ -248,12 +143,10 @@ class AuthService {
       return this.snapshot();
     }
 
-    const { ok, json } = await fetchJson<SessionValidationResponse>(
-      '/api/auth/sessions/validate',
-      { method: 'GET' },
-    );
-
-    if (!ok || !json) {
+    let json;
+    try {
+      json = await createApiClient().validateSession();
+    } catch {
       // Consider this a soft failure; preserve previous state but mark error
       const prevAuthenticated = this.state.authenticated;
       this.state = {
@@ -261,12 +154,12 @@ class AuthService {
         authenticated: false,
         user: null,
         validatedAt: now,
-        error: 'session_validation_failed',
+        error: "session_validation_failed",
       };
       if (prevAuthenticated) {
-        this.emit({ type: 'logout', reason: 'session_invalid' });
+        this.emit({ type: "logout", reason: "session_invalid" });
       } else {
-        this.emit({ type: 'refresh', user: null });
+        this.emit({ type: "refresh", user: null });
       }
       return this.snapshot();
     }
@@ -280,9 +173,9 @@ class AuthService {
         expiresAt: json.expires_at,
       };
       if (!wasAuthenticated) {
-        this.emit({ type: 'login', user: json.user });
+        this.emit({ type: "login", user: json.user });
       } else {
-        this.emit({ type: 'refresh', user: json.user });
+        this.emit({ type: "refresh", user: json.user });
       }
     } else {
       const wasAuthenticated = this.state.authenticated;
@@ -290,12 +183,12 @@ class AuthService {
         authenticated: false,
         user: null,
         validatedAt: now,
-        error: json.error ?? 'unauthenticated',
+        error: json.error ?? "unauthenticated",
       };
       if (wasAuthenticated) {
-        this.emit({ type: 'logout', reason: 'session_invalid' });
+        this.emit({ type: "logout", reason: "session_invalid" });
       } else {
-        this.emit({ type: 'refresh', user: null });
+        this.emit({ type: "refresh", user: null });
       }
     }
 
@@ -315,12 +208,9 @@ class AuthService {
    * Emits logout event even if server responds with an error (optimistic).
    */
   async logout(): Promise<{ success: boolean; error?: string }> {
-    const { ok, json } = await fetchJson<{ success?: boolean; error?: string }>(
-      '/api/auth/sessions/logout',
-      { method: 'POST' },
-    );
+    const json = await createApiClient().logout();
 
-    const success = !!json?.success && ok;
+    const success = !!json?.success;
     // Invalidate local state regardless
     const wasAuthenticated = this.state.authenticated;
     this.state = {
@@ -330,13 +220,19 @@ class AuthService {
     };
 
     if (wasAuthenticated) {
-      this.emit({ type: 'logout', reason: success ? 'explicit' : 'network_error' });
+      this.emit({
+        type: "logout",
+        reason: success ? "explicit" : "network_error",
+      });
     } else {
       // If already logged out, still emit refresh to notify listeners of state change
-      this.emit({ type: 'refresh', user: null });
+      this.emit({ type: "refresh", user: null });
     }
 
-    return { success, error: success ? undefined : json?.error || 'logout_failed' };
+    return {
+      success,
+      error: success ? undefined : json?.error || "logout_failed",
+    };
   }
 
   /**

@@ -83,7 +83,7 @@ export const onGet: RequestHandler = async (event) => {
   try {
     // Create user and session via public API
     const apiClient = createApiClient(event);
-    const authResult = await apiClient.post("/api/auth/native", {
+    const authResult = await apiClient.nativeAuth({
       email: googleUser.email,
       name: googleUser.name,
       picture: googleUser.picture,

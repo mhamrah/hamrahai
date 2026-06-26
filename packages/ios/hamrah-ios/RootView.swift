@@ -16,11 +16,6 @@ struct RootView: View {
         ProgressiveAuthView()
             .environmentObject(nativeAuthManager)
             .environmentObject(biometricManager)
-            .onAppear {
-                syncEngine.setAccessTokenRefresher { [weak nativeAuthManager] in
-                    await nativeAuthManager?.accessTokenForServerRequest()
-                }
-            }
     }
 }
 

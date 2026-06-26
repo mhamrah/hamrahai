@@ -2,25 +2,60 @@
  * Public API client for hamrah-api cookie-based authentication.
  * Uses external endpoints that work with both client and server-side code.
  */
-import type { RequestEventCommon } from '@builder.io/qwik-city';
+import type { RequestEventCommon } from "@builder.io/qwik-city";
 
-import type { ApiUserWire } from '@hamrah/shared';
+import type { ApiUserWire } from "@hamrah/shared";
 export type ApiUser = ApiUserWire;
 
-function readCookie(name: string): string | null {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie
-    .split(';')
-    .map((cookie) => cookie.trim())
-    .find((cookie) => cookie.startsWith(`${name}=`));
-  return match ? decodeURIComponent(match.split('=').slice(1).join('=')) : null;
+export type ApiAuthRequirement = "none" | "optional" | "required";
+export type ApiErrorCategory =
+  | "unauthorized"
+  | "session_expired"
+  | "server"
+  | "network"
+  | "decoding";
+
+export class ApiClientError extends Error {
+  constructor(
+    public readonly category: ApiErrorCategory,
+    message: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = "ApiClientError";
+  }
 }
 
-function csrfHeader(method?: string): Record<string, string> {
-  const normalized = (method || 'GET').toUpperCase();
-  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(normalized)) return {};
-  const token = readCookie('csrf_token');
-  return token ? { 'X-CSRF-Token': token } : {};
+interface ApiRequestOptions extends RequestInit {
+  auth?: ApiAuthRequirement;
+}
+
+function readCookie(name: string, cookieHeader?: string | null): string | null {
+  if (cookieHeader) {
+    const match = cookieHeader
+      .split(";")
+      .map((cookie) => cookie.trim())
+      .find((cookie) => cookie.startsWith(`${name}=`));
+    return match
+      ? decodeURIComponent(match.split("=").slice(1).join("="))
+      : null;
+  }
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.split("=").slice(1).join("=")) : null;
+}
+
+function csrfHeader(
+  method?: string,
+  cookieHeader?: string | null,
+): Record<string, string> {
+  const normalized = (method || "GET").toUpperCase();
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(normalized)) return {};
+  const token = readCookie("csrf_token", cookieHeader);
+  return token ? { "X-CSRF-Token": token } : {};
 }
 
 export interface ApiAuthResponse {
@@ -29,10 +64,9 @@ export interface ApiAuthResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  expires_at?: string;
   error?: string;
 }
-
-
 
 export interface NativeAuthRequest {
   provider?: string;
@@ -62,120 +96,194 @@ export class HamrahApiClient {
 
   private async fetchApi<T>(
     path: string,
-    options: RequestInit = {},
-    withCredentials = true
+    options: ApiRequestOptions = {},
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const method = options.method || "GET";
+    const auth = options.auth ?? "required";
+    const cookieHeader = this.event?.request.headers.get("cookie") ?? null;
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...csrfHeader(options.method),
+      "Content-Type": "application/json",
+      ...csrfHeader(method, cookieHeader),
       ...(options.headers as Record<string, string> | undefined),
     };
 
     // Forward cookies for SSR (if present)
-    if (withCredentials && this.event?.request.headers.has('cookie')) {
-      headers['cookie'] = this.event.request.headers.get('cookie')!;
+    if (auth !== "none" && cookieHeader) {
+      headers.cookie = cookieHeader;
     }
 
-    const resp = await fetch(url, {
-      ...options,
-      headers,
-      credentials: withCredentials ? 'include' : 'same-origin',
-    });
+    let resp: Response;
+    try {
+      resp = await fetch(url, {
+        ...options,
+        headers,
+        credentials: "include",
+      });
+    } catch (error) {
+      throw new ApiClientError(
+        "network",
+        error instanceof Error ? error.message : "Network request failed",
+      );
+    }
+
+    let body: unknown = null;
+    try {
+      body = await resp.json();
+    } catch {
+      if (resp.ok) {
+        throw new ApiClientError(
+          "decoding",
+          "Response was not valid JSON",
+          resp.status,
+        );
+      }
+    }
 
     if (!resp.ok) {
-      const error = await resp.json().catch(() => ({}));
-      throw new Error((error as any)?.error || (error as any)?.message || `API error: ${resp.status}`);
+      throw this.errorForResponse(resp.status, body, auth);
     }
-    return resp.json();
+    return body as T;
+  }
+
+  private errorForResponse(
+    status: number,
+    body: unknown,
+    auth: ApiAuthRequirement,
+  ): ApiClientError {
+    const message =
+      typeof body === "object" && body !== null
+        ? ((body as any).error ?? (body as any).message)
+        : undefined;
+    if (status === 401) {
+      return new ApiClientError(
+        auth === "required" ? "session_expired" : "unauthorized",
+        message || "Authentication required",
+        status,
+      );
+    }
+    if (status === 403) {
+      return new ApiClientError(
+        "unauthorized",
+        message || "Unauthorized",
+        status,
+      );
+    }
+    return new ApiClientError(
+      "server",
+      message || `API error: ${status}`,
+      status,
+    );
   }
 
   // Public endpoint: Validate session via cookie
   async validateSession(): Promise<ApiAuthResponse> {
-    return this.fetchApi<ApiAuthResponse>('/api/auth/sessions/validate', {
-      method: 'GET',
+    return this.fetchApi<ApiAuthResponse>("/api/auth/sessions/validate", {
+      method: "GET",
+      auth: "required",
     });
   }
 
   // Public endpoint: Logout session
-  async logout(): Promise<{ success: boolean; message?: string; error?: string }> {
+  async logout(): Promise<{
+    success: boolean;
+    message?: string;
+    error?: string;
+  }> {
     try {
-      const resp = await fetch(`${this.baseUrl}/api/auth/sessions/logout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...csrfHeader('POST') },
-        credentials: 'include',
-      });
-      const body = (await resp.json().catch(() => ({}))) as {
-        success?: boolean;
+      return await this.fetchApi<{
+        success: boolean;
         message?: string;
         error?: string;
-      };
-      if (!resp.ok) {
-        return { success: false, error: body?.error || 'logout_failed' };
-      }
-      return { success: !!body?.success, message: body?.message };
+      }>("/api/auth/sessions/logout", {
+        method: "POST",
+        auth: "required",
+      });
     } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : 'network_error' };
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : "network_error",
+      };
     }
   }
 
-
-
   // Generic REST methods for public API calls
-  async get<T = any>(path: string): Promise<T> {
+  async get<T = any>(
+    path: string,
+    options: Pick<ApiRequestOptions, "auth"> = {},
+  ): Promise<T> {
     return this.fetchApi<T>(path, {
-      method: 'GET',
+      method: "GET",
+      ...options,
     });
   }
 
-  async post<T = any>(path: string, data?: any): Promise<T> {
+  async post<T = any>(
+    path: string,
+    data?: any,
+    options: Pick<ApiRequestOptions, "auth"> = {},
+  ): Promise<T> {
     return this.fetchApi<T>(path, {
-      method: 'POST',
+      method: "POST",
       body: data ? JSON.stringify(data) : undefined,
+      ...options,
     });
   }
 
-  async patch<T = any>(path: string, data?: any): Promise<T> {
+  async patch<T = any>(
+    path: string,
+    data?: any,
+    options: Pick<ApiRequestOptions, "auth"> = {},
+  ): Promise<T> {
     return this.fetchApi<T>(path, {
-      method: 'PATCH',
+      method: "PATCH",
       body: data ? JSON.stringify(data) : undefined,
+      ...options,
     });
   }
 
-  async delete<T = any>(path: string): Promise<T> {
+  async delete<T = any>(
+    path: string,
+    options: Pick<ApiRequestOptions, "auth"> = {},
+  ): Promise<T> {
     return this.fetchApi<T>(path, {
-      method: 'DELETE',
+      method: "DELETE",
+      ...options,
     });
   }
 
   // Public endpoint: Revoke specific token
-  async revokeToken(tokenId: string): Promise<{ success: boolean; message: string }> {
+  async revokeToken(
+    tokenId: string,
+  ): Promise<{ success: boolean; message: string }> {
     return this.fetchApi<{ success: boolean; message: string }>(
       `/api/auth/tokens/${tokenId}/revoke`,
       {
-        method: 'DELETE',
-      }
+        method: "DELETE",
+      },
     );
   }
 
   // Public endpoint: Revoke all user tokens
-  async revokeAllUserTokens(userId: string): Promise<{ success: boolean; message: string }> {
+  async revokeAllUserTokens(
+    userId: string,
+  ): Promise<{ success: boolean; message: string }> {
     return this.fetchApi<{ success: boolean; message: string }>(
       `/api/auth/users/${userId}/tokens/revoke`,
       {
-        method: 'DELETE',
-      }
+        method: "DELETE",
+      },
     );
   }
 
   // Public endpoint: Native app authentication
   async nativeAuth(params: NativeAuthRequest): Promise<ApiAuthResponse> {
-    return this.fetchApi<ApiAuthResponse>('/api/auth/native', {
-      method: 'POST',
+    return this.fetchApi<ApiAuthResponse>("/api/auth/native", {
+      method: "POST",
       body: JSON.stringify(params),
+      auth: "none",
     });
   }
-
 }
 
 /**
@@ -186,25 +294,26 @@ export class HamrahApiClient {
 function getApiBaseUrl(): string {
   // Explicit overrides for tests or environments
   const override =
-    (typeof window !== 'undefined' && (window as any).__API_BASE) ||
+    (typeof window !== "undefined" && (window as any).__API_BASE) ||
     import.meta.env.VITE_API_BASE;
 
   if (override) return String(override);
 
-  if (typeof window !== 'undefined') {
-    const isHttps = window.location.protocol === 'https:';
+  if (typeof window !== "undefined") {
+    const isHttps = window.location.protocol === "https:";
     const isLocalhost =
-      window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
 
     // Prefer matching scheme for localhost to avoid mixed content
     if (isLocalhost) {
-      return isHttps ? 'https://localhost:8080' : 'http://localhost:8080';
+      return isHttps ? "https://localhost:8080" : "http://localhost:8080";
     }
-    if (isHttps) return 'https://api.hamrah.app';
+    if (isHttps) return "https://api.hamrah.app";
   }
 
   // Default
-  return 'https://api.hamrah.app';
+  return "https://api.hamrah.app";
 }
 
 /**

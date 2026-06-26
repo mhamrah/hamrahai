@@ -36,7 +36,7 @@
     #if os(macOS) guard below.
  3. Calls to `initializeAttestation` on macOS are no-ops and will log once.
 
- The rest of the app (SecureAPIService, NativeAuthManager) can remain unchanged.
+ The rest of the app (HamrahAPIClient, NativeAuthManager) can remain unchanged.
  */
 
 #if os(macOS)

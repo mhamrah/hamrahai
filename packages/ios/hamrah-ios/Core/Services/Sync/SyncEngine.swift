@@ -19,8 +19,6 @@ final class SyncEngine: ObservableObject {
 
     private let api: LinkAPI
     private let modelContainer: ModelContainer
-    private let accessTokenProvider: () -> String?
-    private var accessTokenRefresher: (() async -> String?)?
 
     private let logger = Logger(subsystem: "app.hamrah.ios", category: "SyncEngine")
 
@@ -58,16 +56,10 @@ final class SyncEngine: ObservableObject {
     /// Designated initializer supporting dependency injection for testing.
     init(
         api: LinkAPI,
-        modelContainer: ModelContainer,
-        accessTokenProvider: @escaping () -> String? = {
-            KeychainManager.shared.retrieveString(for: "hamrah_access_token")
-        },
-        accessTokenRefresher: (() async -> String?)? = nil
+        modelContainer: ModelContainer
     ) {
         self.api = api
         self.modelContainer = modelContainer
-        self.accessTokenProvider = accessTokenProvider
-        self.accessTokenRefresher = accessTokenRefresher
 
         setupPathMonitor()
     }
@@ -88,11 +80,6 @@ final class SyncEngine: ObservableObject {
     /// Immediately runs a full sync on the current task; awaits completion.
     func runSyncNow(reason: String = "manual") async {
         await performSync(reason: reason)
-    }
-
-    @MainActor
-    func setAccessTokenRefresher(_ refresher: @escaping () async -> String?) {
-        accessTokenRefresher = refresher
     }
 
     /// Call from BGProcessingTask (background fetch).
@@ -128,18 +115,12 @@ final class SyncEngine: ObservableObject {
             isSyncingNow = false
         }
 
-        guard let token = await accessToken() else {
-            logger.info("Skipping sync; no access token available. reason=\(reason, privacy: .public)")
-            lastSyncError = "Sign in to sync."
-            return
-        }
-
         let context = modelContainer.mainContext
         queuedLinkCount = queuedLinks(context).count
         logger.info("Starting sync; reason=\(reason, privacy: .public)")
 
-        await syncOutboundLinks(context: context, token: token)
-        await syncInboundLinks(context: context, token: token)
+        await syncOutboundLinks(context: context)
+        await syncInboundLinks(context: context)
         queuedLinkCount = queuedLinks(context).count
         lastSyncAt = Date()
 
@@ -181,26 +162,17 @@ final class SyncEngine: ObservableObject {
         link.updatedAt = Date()
     }
 
-    private func accessToken() async -> String? {
-        if let accessTokenRefresher {
-            return await accessTokenRefresher()
-        }
-
-        return accessTokenProvider()
-    }
-
     private func currentPrefs(_ context: ModelContext) -> UserPrefs? {
         (try? context.fetch(FetchDescriptor<UserPrefs>()))?.first
     }
 
-    private func syncOutboundLinks(context: ModelContext, token: String) async {
+    private func syncOutboundLinks(context: ModelContext) async {
         let prefs = currentPrefs(context)
 
         for link in queuedLinks(context) {
             do {
                 let resp = try await api.postLink(
-                    payload: payload(for: link, prefs: prefs),
-                    token: token
+                    payload: payload(for: link, prefs: prefs)
                 )
                 updateSynced(link, response: resp)
             } catch {
@@ -220,12 +192,12 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Inbound
 
-    private func syncInboundLinks(context: ModelContext, token: String) async {
+    private func syncInboundLinks(context: ModelContext) async {
         let cursor = SyncCursor.fetchOrCreateSingleton(in: context)
         let since = cursor.lastUpdatedCursor ?? ""
 
         do {
-            let delta = try await api.getLinks(since: since, limit: 100, token: token)
+            let delta = try await api.getLinks(since: since, limit: 100)
             for serverLink in delta.links {
                 mergeServerLink(serverLink, context: context)
             }
@@ -344,17 +316,17 @@ extension SyncCursor {
 
 /// Abstracts server operations used by sync so it can be mocked in tests.
 protocol LinkAPI {
-    func postLink(payload: OutboundLinkPayload, token: String?) async throws -> PostLinkResponse
-    func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse
+    func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse
+    func getLinks(since: String, limit: Int) async throws -> DeltaResponse
 }
 
 #if DEBUG
     struct PreviewLinkAPI: LinkAPI {
-        func postLink(payload: OutboundLinkPayload, token: String?) async throws -> PostLinkResponse {
+        func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse {
             PostLinkResponse(serverId: payload.clientId, canonicalUrl: payload.url)
         }
 
-        func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse {
+        func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
             DeltaResponse(links: [], nextCursor: nil)
         }
     }
@@ -432,25 +404,23 @@ struct ServerLink: Codable {
     }
 }
 
-// MARK: - Concrete API client using SecureAPIService
+// MARK: - Link domain API
 
-/// Concrete implementation backed by SecureAPIService and App Attestation.
+/// Concrete implementation backed by HamrahAPIClient.
 /// Endpoints follow the backend contract; canonicalization is performed on the server.
 final class SecureAPILinkClient: LinkAPI {
 
     /// POST /v1/links - strict payload (snake_case): url, client_id, source_app?, shared_text?, shared_at? -> returns { id, canonical_url }
-    func postLink(payload: OutboundLinkPayload, token: String?) async throws -> PostLinkResponse {
-        let body: [String: Any] = try encodeToJSONObject(payload)
-
-        return try await SecureAPIService.shared.post(
-            endpoint: "/v1/links",
-            body: body,
-            accessToken: token,
+    func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse {
+        try await HamrahAPIClient.shared.post(
+            "/v1/links",
+            body: payload,
+            auth: .required,
             responseType: PostLinkResponse.self
         )
     }
 
-    func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse {
+    func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
         var comps = URLComponents()
         comps.path = "/v1/links"
         comps.queryItems = [
@@ -458,25 +428,11 @@ final class SecureAPILinkClient: LinkAPI {
             URLQueryItem(name: "limit", value: "\(limit)"),
         ]
         let endpoint = comps.string ?? "/v1/links"
-        return try await SecureAPIService.shared.get(
-            endpoint: endpoint,
-            accessToken: token,
+        return try await HamrahAPIClient.shared.get(
+            endpoint,
+            auth: .required,
             responseType: DeltaResponse.self
         )
-    }
-
-    // Encodes Encodable into JSON object dictionary using JSONEncoder then JSONSerialization
-    private func encodeToJSONObject<T: Encodable>(_ value: T) throws -> [String: Any] {
-        let data = try JSONEncoder.iso8601.encode(value)
-        let obj = try JSONSerialization.jsonObject(with: data, options: [])
-        guard let dict = obj as? [String: Any] else {
-            throw NSError(
-                domain: "SecureAPILinkClient", code: 0,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Invalid JSON structure"
-                ])
-        }
-        return dict
     }
 }
 
