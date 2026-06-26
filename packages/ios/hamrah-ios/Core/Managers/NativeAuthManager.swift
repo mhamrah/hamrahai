@@ -865,9 +865,11 @@ class NativeAuthManager: NSObject, ObservableObject {
             guard let httpResponse = response as? HTTPURLResponse,
                 httpResponse.statusCode == 200
             else {
-                print(
-                    "🔄 Token refresh failed with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)"
-                )
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                print("🔄 Token refresh failed with status: \(statusCode)")
+                if statusCode == 401 || statusCode == 403 {
+                    logout()
+                }
                 return false
             }
 
@@ -906,6 +908,28 @@ class NativeAuthManager: NSObject, ObservableObject {
             print("❌ Token refresh error: \(error)")
             return false
         }
+    }
+
+    func accessTokenForServerRequest() async -> String? {
+        if accessToken == nil {
+            loadStoredAuth()
+        }
+
+        guard isAuthenticated || hasValidStoredTokens() else {
+            return nil
+        }
+
+        if accessToken == nil || isTokenExpiringSoon() {
+            guard KeychainManager.shared.retrieveString(for: "hamrah_refresh_token") != nil else {
+                return nil
+            }
+
+            guard await refreshToken() else {
+                return nil
+            }
+        }
+
+        return accessToken
     }
 
     func isTokenExpiringSoon() -> Bool {
