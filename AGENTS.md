@@ -40,9 +40,9 @@ hamrahai/
 4. **Security**: App Attestation, certificate pinning, secure token storage
 5. **Testing**: Comprehensive unit, integration, and functional regression coverage required
 
-### Default Engineering Mode: Ponytail Full
+### Default Engineering Mode
 
-Use the "ponytail" skill in **full** mode for all work in this repository. Lazy means efficient, not careless. The best change is the smallest correct change after understanding the real flow end to end.
+Be efficient, not careless. The best change is the smallest correct change after understanding the real flow end to end.
 
 Stop at the first rung that holds:
 
@@ -54,7 +54,7 @@ Stop at the first rung that holds:
 6. **Can it be one line?** Make it one line if it remains readable and correct.
 7. **Only then:** write the minimum code that works.
 
-Ponytail full does **not** mean shallow work. Never be lazy about understanding, trust-boundary validation, security, accessibility basics, data-loss prevention, or the tests that prove the feature works. For bug fixes, find the root cause by checking sibling callers and shared paths before editing. Fix once at the common layer when that is the smallest correct fix.
+Do **not** do shallow work. Never be lazy about understanding, trust-boundary validation, security, accessibility basics, data-loss prevention, or the tests that prove the feature works. For bug fixes, find the root cause by checking sibling callers and shared paths before editing. Fix once at the common layer when that is the smallest correct fix.
 
 ### Regression Prevention Contract
 
