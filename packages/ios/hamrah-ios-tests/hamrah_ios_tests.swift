@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftData
 import Testing
 @testable import hamrah_ios
 
@@ -15,6 +16,21 @@ import Testing
 
 @MainActor
 struct hamrah_ios_tests {
+
+    final class MockLinkAPI: LinkAPI {
+        var postCallCount = 0
+        var getCallCount = 0
+
+        func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse {
+            postCallCount += 1
+            return PostLinkResponse(serverId: payload.clientId, canonicalUrl: payload.url)
+        }
+
+        func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
+            getCallCount += 1
+            return DeltaResponse(links: [], nextCursor: nil)
+        }
+    }
 
     @Test func example() async throws {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.
@@ -27,14 +43,14 @@ struct hamrah_ios_tests {
                 code: DCError.Code.invalidInput.rawValue
             )
 
-            #expect(SecureAPIService.isRecoverableAttestationError(error))
+            #expect(HamrahAPIClient.isRecoverableAttestationError(error))
         #endif
     }
 
     @Test func appAttestationKeyGenerationFailureIsRecoverable() {
         #if os(iOS)
             #expect(
-                SecureAPIService.isRecoverableAttestationError(
+                HamrahAPIClient.isRecoverableAttestationError(
                     AttestationError.keyGenerationFailed("Key invalidated")
                 )
             )
@@ -44,7 +60,7 @@ struct hamrah_ios_tests {
     @Test func unrelatedErrorIsNotRecoverableForAttestationRetry() {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
 
-        #expect(!SecureAPIService.isRecoverableAttestationError(error))
+        #expect(!HamrahAPIClient.isRecoverableAttestationError(error))
     }
 
     @MainActor
@@ -148,9 +164,9 @@ struct hamrah_ios_tests {
                 code: DCError.Code.unknownSystemFailure.rawValue
             )
 
-            #expect(SecureAPIService.isRecoverableAttestationError(error))
+            #expect(HamrahAPIClient.isRecoverableAttestationError(error))
             #expect(
-                SecureAPIService.attestationFailureStrategy(
+                HamrahAPIClient.attestationFailureStrategy(
                     for: error,
                     accessToken: "access-token"
                 ) == .recoverThenFallback
@@ -166,7 +182,7 @@ struct hamrah_ios_tests {
             )
 
             #expect(
-                SecureAPIService.attestationFailureStrategy(
+                HamrahAPIClient.attestationFailureStrategy(
                     for: error,
                     accessToken: nil
                 ) == .fallback
@@ -175,7 +191,7 @@ struct hamrah_ios_tests {
     }
 
     @Test func fallbackAttestationHeadersMatchServerBypassContract() {
-        let headers = SecureAPIService.fallbackAttestationHeaders(
+        let headers = HamrahAPIClient.fallbackAttestationHeaders(
             bundleIdentifier: "app.hamrah.ios",
             appVersion: "1.2.3"
         )
@@ -183,6 +199,42 @@ struct hamrah_ios_tests {
         #expect(headers["X-App-Attestation-Mode"] == "none")
         #expect(headers["X-iOS-Bundle-ID"] == "app.hamrah.ios")
         #expect(headers["X-iOS-App-Version"] == "1.2.3")
+    }
+
+    @Test func passkeyPathComponentsCannotEscapeTheirRouteSegment() {
+        #expect(PasskeyAPI.pathComponent("user/with/slash") == "user%2Fwith%2Fslash")
+        #expect(PasskeyAPI.pathComponent("credential?id=1") == "credential%3Fid%3D1")
+    }
+
+    @Test func syncDomainApiDoesNotExposeAccessTokenArguments() async throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: LinkEntity.self, TagEntity.self, SyncCursor.self, UserPrefs.self,
+            configurations: config
+        )
+        let context = container.mainContext
+        let url = URL(string: "https://example.com/refresh")!
+        let link = LinkEntity(
+            originalUrl: url,
+            canonicalUrl: url,
+            sharedAt: Date(),
+            status: "queued",
+            updatedAt: Date(),
+            createdAt: Date()
+        )
+        context.insert(link)
+        try context.save()
+
+        let api = MockLinkAPI()
+        let engine = SyncEngine(
+            api: api,
+            modelContainer: container
+        )
+
+        await engine._testRunSyncNow(reason: "test_domain_api_without_token_surface")
+
+        #expect(api.postCallCount == 1)
+        #expect(api.getCallCount == 1)
     }
 
 }

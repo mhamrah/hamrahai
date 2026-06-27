@@ -122,10 +122,6 @@ class NativeAuthManager: NSObject, ObservableObject {
     @Published private(set) var googleSignInStatus =
         GoogleSignInConfigurationValidator.validate()
 
-    var baseURL: String {
-        APIConfiguration.shared.baseURL
-    }
-
     private var nativePlatformName: String {
         #if os(iOS)
             return "ios"
@@ -137,9 +133,6 @@ class NativeAuthManager: NSObject, ObservableObject {
     }
 
     @Published var accessToken: String?
-
-    // Secure API service with App Attestation
-    private let secureAPI = SecureAPIService.shared
 
     struct HamrahUser: Codable {
         let id: String
@@ -285,10 +278,6 @@ class NativeAuthManager: NSObject, ObservableObject {
         }
     }
 
-    private struct BackendAuthErrorResponse: Decodable {
-        let error: String?
-    }
-
     static func backendAuthPayload(
         provider: String,
         credential: String,
@@ -352,6 +341,32 @@ class NativeAuthManager: NSObject, ObservableObject {
             case id
             case transports
         }
+    }
+
+    struct WebAuthnDiscoverableBeginRequest: Encodable {
+        let explicit: Bool
+        let email: String?
+    }
+
+    struct WebAuthnDiscoverableVerifyRequest: Encodable {
+        let response: WebAuthnAssertionCredential
+        let challenge_id: String
+        let mode: String
+        let platform: String
+    }
+
+    struct WebAuthnAssertionCredential: Encodable {
+        let id: String
+        let rawId: String
+        let type: String
+        let response: WebAuthnAssertionCredentialResponse
+    }
+
+    struct WebAuthnAssertionCredentialResponse: Encodable {
+        let authenticatorData: String
+        let clientDataJSON: String
+        let signature: String
+        let userHandle: String
     }
 
     override init() {
@@ -476,43 +491,16 @@ class NativeAuthManager: NSObject, ObservableObject {
     // MARK: - Passkey Authentication
 
     func checkPasskeyAvailability() async -> Bool {
-        guard let token = accessToken else {
-            print("🔍 No access token available for passkey check")
-            return false
-        }
-
         guard let userId = currentUser?.id else {
             print("🔍 No user ID available for passkey check")
             return false
         }
 
         do {
-            struct PasskeyCredentialsResponse: Codable {
-                let success: Bool
-                let credentials: [PasskeyCredentialInfo]
-                let error: String?
-            }
-
-            struct PasskeyCredentialInfo: Codable {
-                let id: String
-                let name: String?
-
-                enum CodingKeys: String, CodingKey {
-                    case id
-                    case name
-                }
-            }
-
-            let response = try await secureAPI.get(
-                endpoint: "/api/webauthn/users/\(userId)/credentials",
-                accessToken: token,
-                responseType: PasskeyCredentialsResponse.self,
-                customBaseURL: nil
-            )
-
-            let hasPasskeys = response.success && !response.credentials.isEmpty
+            let credentials = try await PasskeyAPI().list(userId: userId)
+            let hasPasskeys = !credentials.isEmpty
             print(
-                "🔍 Passkey availability check: \(hasPasskeys ? "has passkeys (\(response.credentials.count))" : "no passkeys")"
+                "🔍 Passkey availability check: \(hasPasskeys ? "has passkeys (\(credentials.count))" : "no passkeys")"
             )
             return hasPasskeys
 
@@ -559,17 +547,16 @@ class NativeAuthManager: NSObject, ObservableObject {
     }
 
     private func beginWebAuthnAuthentication(email: String?) async throws -> WebAuthnBeginResponse {
-        var body: [String: Any] = ["explicit": true]  // flag for explicit discoverable auth
-        if let email = email, !email.isEmpty {
-            body["email"] = email
-        }
+        let body = WebAuthnDiscoverableBeginRequest(
+            explicit: true,
+            email: email?.isEmpty == false ? email : nil
+        )
 
-        return try await secureAPI.post(
-            endpoint: "/api/webauthn/authenticate/discoverable",
+        return try await HamrahAPIClient.shared.post(
+            "/api/webauthn/authenticate/discoverable",
             body: body,
-            accessToken: nil,  // No auth needed for discoverable begin
+            auth: .none,
             responseType: WebAuthnBeginResponse.self,
-            customBaseURL: baseURL
         )
     }
 
@@ -599,26 +586,22 @@ class NativeAuthManager: NSObject, ObservableObject {
         assertion: ASAuthorizationPlatformPublicKeyCredentialAssertion, challengeId: String
     ) async throws {
         // Build SimpleWebAuthn-style assertion payload
-        let authResponseData =
-            [
-                "id": assertion.credentialID.base64EncodedString(),
-                "rawId": assertion.credentialID.base64EncodedString(),
-                "type": "public-key",
-                "response": [
-                    "authenticatorData": assertion.rawAuthenticatorData.base64EncodedString(),
-                    "clientDataJSON": assertion.rawClientDataJSON.base64EncodedString(),
-                    "signature": assertion.signature.base64EncodedString(),
-                    "userHandle": assertion.userID?.base64EncodedString() ?? "",
-                ],
-            ] as [String: Any]
-
-        let body =
-            [
-                "response": authResponseData,
-                "challenge_id": challengeId,
-                "mode": "discoverable-explicit",
-                "platform": "ios",
-            ] as [String: Any]
+        let body = WebAuthnDiscoverableVerifyRequest(
+            response: WebAuthnAssertionCredential(
+                id: assertion.credentialID.base64EncodedString(),
+                rawId: assertion.credentialID.base64EncodedString(),
+                type: "public-key",
+                response: WebAuthnAssertionCredentialResponse(
+                    authenticatorData: assertion.rawAuthenticatorData.base64EncodedString(),
+                    clientDataJSON: assertion.rawClientDataJSON.base64EncodedString(),
+                    signature: assertion.signature.base64EncodedString(),
+                    userHandle: assertion.userID?.base64EncodedString() ?? ""
+                )
+            ),
+            challenge_id: challengeId,
+            mode: "discoverable-explicit",
+            platform: "ios"
+        )
 
         struct PasskeyAuthResponse: Codable {
             let success: Bool
@@ -643,12 +626,11 @@ class NativeAuthManager: NSObject, ObservableObject {
         }
 
         // Native clients receive bearer tokens; web clients rely on the HttpOnly session cookie.
-        let result = try await secureAPI.post(
-            endpoint: "/api/webauthn/authenticate/discoverable/verify",
+        let result = try await HamrahAPIClient.shared.post(
+            "/api/webauthn/authenticate/discoverable/verify",
             body: body,
-            accessToken: nil,
-            responseType: PasskeyAuthResponse.self,
-            customBaseURL: baseURL
+            auth: .none,
+            responseType: PasskeyAuthResponse.self
         )
 
         guard result.success, let user = result.user, let accessToken = result.accessToken else {
@@ -662,18 +644,15 @@ class NativeAuthManager: NSObject, ObservableObject {
         self.isAuthenticated = true
         self.setLastUsedEmail(user.email)
 
-        if let refreshToken = result.refreshToken ?? result.sessionToken {
-            _ = KeychainManager.shared.store(refreshToken, for: "hamrah_refresh_token")
-        }
-        if let expiresIn = result.expiresIn {
-            _ = KeychainManager.shared.store(
-                Date().timeIntervalSince1970 + TimeInterval(expiresIn),
-                for: "hamrah_token_expires_at")
-        }
+        SessionManager.shared.storeTokens(
+            accessToken: accessToken,
+            refreshToken: result.refreshToken ?? result.sessionToken,
+            expiresIn: result.expiresIn
+        )
         self.storeAuthState()
 
         // Initialize App Attestation (blocks on first install, skips if already initialized)
-        await secureAPI.initializeAttestation(accessToken: accessToken)
+        await HamrahAPIClient.shared.initializeAttestationIfNeeded()
 
         print("✅ Passkey authentication successful")
     }
@@ -698,15 +677,6 @@ class NativeAuthManager: NSObject, ObservableObject {
     private func authenticateWithBackend(
         provider: String, credential: String, additionalData: [String: String] = [:]
     ) async throws {
-        let url = URL(string: "\(baseURL)/api/auth/native")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("hamrah-ios", forHTTPHeaderField: "X-Requested-With")
-        if let accessToken {
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        }
-
         let body = Self.backendAuthPayload(
             provider: provider,
             credential: credential,
@@ -714,39 +684,20 @@ class NativeAuthManager: NSObject, ObservableObject {
             additionalData: additionalData
         )
 
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-            httpResponse.statusCode == 200
-        else {
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            let backendError =
-                (try? JSONDecoder().decode(BackendAuthErrorResponse.self, from: data))?.error
-                ?? String(data: data, encoding: .utf8)
-            print("❌ Auth failed with status code: \(statusCode)")
-            throw NSError(
-                domain: "Auth", code: -1,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        backendError.map {
-                            "Backend authentication failed with status \(statusCode): \($0)"
-                        } ?? "Backend authentication failed with status \(statusCode)"
-                ])
-        }
-
         let authResponse: AuthResponse
         do {
-            authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
+            authResponse = try await HamrahAPIClient.shared.post(
+                "/api/auth/native",
+                body: body,
+                auth: .optional,
+                responseType: AuthResponse.self
+            )
         } catch {
-            print("❌ JSON Decoding Error: \(error)")
-            print("❌ Raw response: \(String(data: data, encoding: .utf8) ?? "nil")")
             throw NSError(
                 domain: "Auth", code: -1,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Failed to parse server response: \(error.localizedDescription)"
+                        "Backend authentication failed: \(error.localizedDescription)"
                 ])
         }
 
@@ -780,23 +731,15 @@ class NativeAuthManager: NSObject, ObservableObject {
                 }
             }
 
-            // Store refresh token if provided
-            if let refreshToken = authResponse.refreshToken {
-                _ = KeychainManager.shared.store(refreshToken, for: "hamrah_refresh_token")
-            }
-
-            // Store token expiration if provided
-            if let expiresIn = authResponse.expiresIn {
-                let expiresAt = Date().timeIntervalSince1970 + TimeInterval(expiresIn)
-                _ = KeychainManager.shared.store(expiresAt, for: "hamrah_token_expires_at")
-            }
-
+            SessionManager.shared.storeTokens(
+                accessToken: token,
+                refreshToken: authResponse.refreshToken,
+                expiresIn: authResponse.expiresIn
+            )
             self.storeAuthState()
 
             // Initialize App Attestation (blocks on first install, skips if already initialized)
-            if let token = self.accessToken {
-                await secureAPI.initializeAttestation(accessToken: token)
-            }
+            await HamrahAPIClient.shared.initializeAttestationIfNeeded()
 
             print("✅ Backend authentication successful - Token accepted")
         } else {
@@ -818,127 +761,62 @@ class NativeAuthManager: NSObject, ObservableObject {
     // MARK: - Token Validation
 
     func validateAccessToken() async -> Bool {
-        guard let token = accessToken else { return false }
-
         guard currentUser?.id != nil else {
             print("🔍 No user ID available for token validation")
             return false
         }
 
-        // Try to validate with a backend endpoint that we know exists
-        let url = URL(string: "\(baseURL)/api/auth/tokens/validate")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("hamrah-ios", forHTTPHeaderField: "X-Requested-With")
-
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse else { return false }
-
-            if httpResponse.statusCode == 200 {
-                // Token is valid
+            let validation: TokenValidationResponse = try await HamrahAPIClient.shared.get(
+                "/api/auth/tokens/validate",
+                auth: .required,
+                responseType: TokenValidationResponse.self
+            )
+            if validation.valid {
                 print("🔍 Token validation successful")
                 return true
-            } else if httpResponse.statusCode == 401 {
-                // Token is invalid/expired
-                print("🔍 Token validation failed: token expired (401)")
-                await MainActor.run {
-                    logout()
-                }
-                return false
-            } else {
-                // Other errors - assume token is still valid but endpoint might have issues
-                print(
-                    "🔍 Token validation inconclusive with status: \(httpResponse.statusCode), assuming valid"
-                )
-                return true
             }
+            print("🔍 Token validation failed: token is invalid")
+            await MainActor.run { logout() }
+            return false
         } catch {
+            if let apiError = error as? HamrahAPIError {
+                switch apiError {
+                case .unauthorized, .sessionExpired:
+                    await MainActor.run { logout() }
+                    return false
+                default:
+                    break
+                }
+            }
             print("🔍 Token validation error: \(error), assuming valid")
-            // If we can't validate due to network issues, assume token is valid
             return true
         }
+    }
+
+    private struct TokenValidationResponse: Decodable {
+        let valid: Bool
     }
 
     // MARK: - Token Refresh
 
     func refreshToken() async -> Bool {
-        guard let refreshToken = KeychainManager.shared.retrieveString(for: "hamrah_refresh_token")
-        else {
-            print("🔄 No refresh token available")
-            return false
-        }
-
-        let url = URL(string: "\(baseURL)/api/auth/tokens/refresh")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("hamrah-ios", forHTTPHeaderField: "X-Requested-With")
-
-        let body = ["refresh_token": refreshToken]
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse,
-                httpResponse.statusCode == 200
-            else {
-                print(
-                    "🔄 Token refresh failed with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)"
-                )
-                return false
-            }
-
-            struct TokenRefreshResponse: Codable {
-                let access_token: String
-                let refresh_token: String
-                let expires_in: Int
-
-                enum CodingKeys: String, CodingKey {
-                    case access_token
-                    case refresh_token
-                    case expires_in
-                }
-            }
-
-            let tokenResponse = try JSONDecoder().decode(TokenRefreshResponse.self, from: data)
-
-            // Update stored tokens
+        let refreshed = await SessionManager.shared.refreshAccessToken()
+        if refreshed {
             await MainActor.run {
-                self.accessToken = tokenResponse.access_token
-                _ = KeychainManager.shared.store(
-                    tokenResponse.access_token, for: "hamrah_access_token")
-                _ = KeychainManager.shared.store(
-                    tokenResponse.refresh_token, for: "hamrah_refresh_token")
-                _ = KeychainManager.shared.store(
-                    Date().timeIntervalSince1970, for: "hamrah_auth_timestamp")
-                _ = KeychainManager.shared.store(
-                    Date().timeIntervalSince1970 + TimeInterval(tokenResponse.expires_in),
-                    for: "hamrah_token_expires_at")
+                self.accessToken = SessionManager.shared.currentAccessToken()
             }
 
             print("✅ Token refreshed successfully")
             return true
-
-        } catch {
-            print("❌ Token refresh error: \(error)")
-            return false
         }
+
+        print("❌ Token refresh failed")
+        return false
     }
 
     func isTokenExpiringSoon() -> Bool {
-        // Check Keychain first (current storage), then UserDefaults (for backward compatibility/tests)
-        let expiresAt =
-            KeychainManager.shared.retrieveDouble(for: "hamrah_token_expires_at")
-            ?? UserDefaults.standard.double(forKey: "hamrah_token_expires_at")
-
-        guard expiresAt > 0 else { return true }
-
-        let fiveMinutesFromNow = Date().timeIntervalSince1970 + (5 * 60)  // 5 minutes
-        return expiresAt < fiveMinutesFromNow
+        SessionManager.shared.isTokenExpiringSoon()
     }
 
     // MARK: - Storage
@@ -949,11 +827,6 @@ class NativeAuthManager: NSObject, ObservableObject {
         // Store user data
         if let user = currentUser, let userData = try? JSONEncoder().encode(user) {
             _ = keychain.store(userData, for: "hamrah_user")
-        }
-
-        // Store tokens securely
-        if let token = accessToken {
-            _ = keychain.store(token, for: "hamrah_access_token")
         }
 
         // Store authentication state
@@ -970,7 +843,7 @@ class NativeAuthManager: NSObject, ObservableObject {
 
         // Load from secure Keychain
         isAuthenticated = keychain.retrieveBool(for: "hamrah_is_authenticated") ?? false
-        accessToken = keychain.retrieveString(for: "hamrah_access_token")
+        accessToken = SessionManager.shared.currentAccessToken()
 
         if let userData = keychain.retrieve(for: "hamrah_user"),
             let user = try? JSONDecoder().decode(HamrahUser.self, from: userData)
@@ -1055,10 +928,7 @@ class NativeAuthManager: NSObject, ObservableObject {
     }
 
     func hasValidStoredTokens() -> Bool {
-        let keychain = KeychainManager.shared
-        let hasAccessToken = keychain.retrieveString(for: "hamrah_access_token") != nil
-        let hasRefreshToken = keychain.retrieveString(for: "hamrah_refresh_token") != nil
-        return hasAccessToken || hasRefreshToken
+        SessionManager.shared.hasStoredSession()
     }
 
     func forceReauthentication() {
@@ -1238,27 +1108,5 @@ class PasskeyAvailabilityDelegate: NSObject, ASAuthorizationControllerDelegate {
         } else {
             completion(false)
         }
-    }
-}
-
-// MARK: - Helper Extensions for NativeAuthManager
-
-extension NativeAuthManager {
-    private func generateRequestChallenge(url: URL, method: String, body: [String: Any]?) -> Data {
-        // Create a deterministic challenge based on request details
-        var challengeString = "\(method):\(url.absoluteString)"
-
-        if let body = body {
-            // Sort keys for deterministic serialization
-            let sortedKeys = body.keys.sorted()
-            let bodyString = sortedKeys.map { key in
-                "\(key):\(body[key] ?? "")"
-            }.joined(separator: ",")
-            challengeString += ":\(bodyString)"
-        }
-
-        challengeString += ":\(Date().timeIntervalSince1970)"
-
-        return challengeString.data(using: .utf8) ?? Data()
     }
 }

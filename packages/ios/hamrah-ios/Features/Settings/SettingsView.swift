@@ -15,6 +15,10 @@ struct SettingsView: View {
     @EnvironmentObject var biometricManager: BiometricAuthManager
     @EnvironmentObject var syncEngine: SyncEngine
 
+    private let userPrefsAPI = UserPrefsAPI()
+    private let modelCatalogAPI = ModelCatalogAPI()
+    private let passkeyAPI = PasskeyAPI()
+
     // Backing store (SwiftData) for a single UserPrefs instance
     @Query private var prefsQuery: [UserPrefs]
 
@@ -43,6 +47,10 @@ struct SettingsView: View {
 
     private var availableModelIds: [String] {
         availableModels.filter(\.isAvailable).map(\.id)
+    }
+
+    private var canAttemptServerSync: Bool {
+        authManager.isAuthenticated && authManager.hasValidStoredTokens()
     }
 
     var body: some View {
@@ -298,8 +306,7 @@ struct SettingsView: View {
                 showAddPasskey = true
             }
             .font(.caption)
-            .disabled(
-                isLoading || authManager.currentUser == nil || authManager.accessToken == nil)
+            .disabled(isLoading || authManager.currentUser == nil || !canAttemptServerSync)
         }
         .sheet(isPresented: $showAddPasskey) {
             AddPasskeyView(onPasskeyAdded: {
@@ -320,9 +327,9 @@ struct SettingsView: View {
                     ProgressView().controlSize(.small)
                 }
                 Button("Load From Server") { Task { await loadFromServer() } }
-                    .disabled(isLoading || accessToken() == nil)
+                    .disabled(isLoading || !canAttemptServerSync)
                 Button("Save To Server") { Task { await saveToServer() } }
-                    .disabled(isSaving || accessToken() == nil)
+                    .disabled(isSaving || !canAttemptServerSync)
             }
             .buttonStyle(.bordered)
 
@@ -330,7 +337,7 @@ struct SettingsView: View {
                 Text(info).font(.footnote).foregroundStyle(.secondary)
             }
 
-            if accessToken() == nil {
+            if !canAttemptServerSync {
                 Text("Sign in to sync preferences with your account.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -420,7 +427,7 @@ struct SettingsView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(syncEngine.isSyncingNow || accessToken() == nil)
+            .disabled(syncEngine.isSyncingNow || !canAttemptServerSync)
 
             LabeledContent("Queued", value: "\(syncEngine.queuedLinkCount)")
             if let lastSyncAt = syncEngine.lastSyncAt {
@@ -501,24 +508,16 @@ struct SettingsView: View {
 
     private func loadFromServerIfEmpty() async {
         // Load once from server if we have no server values yet
-        if accessToken() == nil { return }
+        if !canAttemptServerSync { return }
         if !preferredModels.isEmpty || defaultModel != SettingsModelCatalog.defaultModelId { return }
         await loadFromServer()
     }
 
     private func loadFromServer() async {
-        guard let token = accessToken() else {
-            infoMessage = "Not signed in."
-            return
-        }
         isLoading = true
         defer { isLoading = false }
         do {
-            let dto: UserPrefsDTO = try await SecureAPIService.shared.get(
-                endpoint: "/v1/user/prefs",
-                accessToken: token,
-                responseType: UserPrefsDTO.self
-            )
+            let dto = try await userPrefsAPI.load()
             await MainActor.run {
                 mapDTOToState(dto)
                 applyToStore()
@@ -533,20 +532,11 @@ struct SettingsView: View {
     }
 
     private func saveToServer() async {
-        guard let token = accessToken() else {
-            infoMessage = "Not signed in."
-            return
-        }
         isSaving = true
         defer { isSaving = false }
         do {
             let dto = makeDTOFromState()
-            let _: UserPrefsDTO = try await SecureAPIService.shared.put(
-                endpoint: "/v1/user/prefs",
-                body: dto.asJSON(),
-                accessToken: token,
-                responseType: UserPrefsDTO.self
-            )
+            let _: UserPrefsDTO = try await userPrefsAPI.save(dto)
             await MainActor.run {
                 applyToStore()
                 infoMessage =
@@ -566,15 +556,9 @@ struct SettingsView: View {
         defer { isFetchingModels = false }
         // Try a best-effort fetch. If missing, keep local defaults.
         do {
-            struct CatalogResponse: Codable { let models: [AIModelDTO] }
-            let token = accessToken()
-            let resp: CatalogResponse = try await SecureAPIService.shared.get(
-                endpoint: "/v1/models",
-                accessToken: token,
-                responseType: CatalogResponse.self
-            )
+            let models = try await modelCatalogAPI.fetch()
             await MainActor.run {
-                availableModels = resp.models.isEmpty ? SettingsModelCatalog.defaultModels : resp.models
+                availableModels = models.isEmpty ? SettingsModelCatalog.defaultModels : models
                 pruneUnavailableModels(showMessage: true)
             }
         } catch {
@@ -595,10 +579,6 @@ struct SettingsView: View {
             PlatformBridge.copyToClipboard(SettingsAPIPrompt.prompt)
         #endif
         infoMessage = "API prompt copied to clipboard."
-    }
-
-    private func accessToken() -> String? {
-        KeychainManager.shared.retrieveString(for: "hamrah_access_token")
     }
 
     private func mapDTOToState(_ dto: UserPrefsDTO) {
@@ -675,52 +655,58 @@ struct SettingsView: View {
         // Debug authentication state
         print("🔍 MyAccountView Authentication Debug:")
         print("  Current User present: \(authManager.currentUser != nil)")
-        print("  Access Token: \(accessToken() != nil ? "present" : "nil")")
+        print("  Stored Session: \(authManager.hasValidStoredTokens() ? "present" : "nil")")
         print("  Is Authenticated: \(authManager.isAuthenticated)")
 
-        guard let accessToken = accessToken() else {
-            passkeysLoadMessage = "Sign in to view passkeys."
-            if showAlertOnFailure {
-                errorMessage = "Not authenticated. Please sign in again."
-                showErrorAlert = true
-            }
-            return
-        }
-
-        isLoading = true
-        passkeysLoadMessage = nil
-        if showAlertOnFailure {
-            errorMessage = nil
-        }
-
         Task {
-            do {
-                let credentials = try await fetchPasskeys(accessToken: accessToken)
+            guard authManager.currentUser != nil else {
                 await MainActor.run {
-                    self.passkeys = credentials
-                    self.passkeysLoadMessage = nil
-                    self.isLoading = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.passkeys = []
-                    self.passkeysLoadMessage = "Passkeys couldn't be loaded right now."
+                    passkeysLoadMessage = "Sign in to view passkeys."
                     if showAlertOnFailure {
-                        self.errorMessage = "Failed to load passkeys: \(error.localizedDescription)"
-                        self.showErrorAlert = true
+                        errorMessage = "Session expired. Please sign in again."
+                        showErrorAlert = true
                     }
-                    self.isLoading = false
                 }
+                return
+            }
+
+            await performLoadPasskeys(showAlertOnFailure: showAlertOnFailure)
+        }
+    }
+
+    private func performLoadPasskeys(showAlertOnFailure: Bool) async {
+        await MainActor.run {
+            isLoading = true
+            passkeysLoadMessage = nil
+            if showAlertOnFailure {
+                errorMessage = nil
+            }
+        }
+
+        do {
+            let credentials = try await fetchPasskeys()
+            await MainActor.run {
+                self.passkeys = credentials
+                self.passkeysLoadMessage = nil
+                self.isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                self.passkeys = []
+                self.passkeysLoadMessage = "Passkeys couldn't be loaded right now."
+                if showAlertOnFailure {
+                    self.errorMessage = "Failed to load passkeys: \(error.localizedDescription)"
+                    self.showErrorAlert = true
+                }
+                self.isLoading = false
             }
         }
     }
 
     private func removePasskey(_ credential: PasskeyCredential) {
-        guard let accessToken = accessToken() else { return }
-
         Task {
             do {
-                try await deletePasskey(credentialId: credential.id, accessToken: accessToken)
+                try await deletePasskey(credentialId: credential.id)
                 await MainActor.run {
                     self.passkeys.removeAll { $0.id == credential.id }
                     self.credentialToDelete = nil
@@ -735,28 +721,18 @@ struct SettingsView: View {
         }
     }
 
-    private func fetchPasskeys(accessToken: String) async throws -> [PasskeyCredential] {
+    private func fetchPasskeys() async throws -> [PasskeyCredential] {
         guard let userId = authManager.currentUser?.id else {
             throw NSError(
                 domain: "API",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "User ID not available"])
         }
-        let response: PasskeyListResponse = try await SecureAPIService.shared.get(
-            endpoint: "/api/webauthn/users/\(userId)/credentials",
-            accessToken: accessToken,
-            responseType: PasskeyListResponse.self
-        )
-        return response.credentials
+        return try await passkeyAPI.list(userId: userId)
     }
 
-    private func deletePasskey(credentialId: String, accessToken: String) async throws {
-        // Updated to use path parameter style delete (no body)
-        _ = try await SecureAPIService.shared.delete(
-            endpoint: "/api/webauthn/credentials/\(credentialId)",
-            accessToken: accessToken,
-            responseType: APIResponse.self
-        )
+    private func deletePasskey(credentialId: String) async throws {
+        try await passkeyAPI.delete(credentialId: credentialId)
     }
 
     // MARK: - Autosave
@@ -790,12 +766,7 @@ struct SettingsView: View {
     }
 
     private func runHealthSync() async {
-        if authManager.isTokenExpiringSoon() {
-            _ = await authManager.refreshToken()
-        }
-        if let token = authManager.accessToken ?? accessToken() {
-            await SecureAPIService.shared.initializeAttestation(accessToken: token)
-        }
+        await HamrahAPIClient.shared.initializeAttestationIfNeeded()
         await syncEngine.runSyncNow(reason: "settings_manual_sync")
         await fetchModelCatalog()
         await loadFromServer()

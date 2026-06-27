@@ -199,17 +199,16 @@
         private func beginWebAuthnRegistrationForNewUser(email: String, name: String) async throws
             -> WebAuthnBeginRegistrationResponse
         {
-            let body = [
-                "email": email,
-                "name": name,
-            ]
+            let body = WebAuthnNewUserBeginRegistrationRequest(
+                email: email,
+                name: name
+            )
 
-            return try await SecureAPIService.shared.post(
-                endpoint: "/api/webauthn/register/begin",
+            return try await HamrahAPIClient.shared.post(
+                "/api/webauthn/register/begin",
                 body: body,
-                accessToken: nil,  // No auth needed for new user registration
+                auth: .none,
                 responseType: WebAuthnBeginRegistrationResponse.self,
-                customBaseURL: APIConfiguration.shared.baseURL
             )
         }
 
@@ -243,32 +242,28 @@
             email: String, name: String
         ) async throws {
             // Create the response object matching SimpleWebAuthn's RegistrationResponseJSON format
-            let registrationResponseData =
-                [
-                    "id": attestation.credentialID.base64EncodedString(),
-                    "rawId": attestation.credentialID.base64EncodedString(),
-                    "type": "public-key",
-                    "response": [
-                        "attestationObject": attestation.rawAttestationObject?.base64EncodedString()
-                            ?? "",
-                        "clientDataJSON": attestation.rawClientDataJSON.base64EncodedString(),
-                    ],
-                ] as [String: Any]
+            let registrationResponse = WebAuthnRegistrationCredential(
+                id: attestation.credentialID.base64EncodedString(),
+                rawId: attestation.credentialID.base64EncodedString(),
+                type: "public-key",
+                response: WebAuthnRegistrationCredentialResponse(
+                    attestationObject: attestation.rawAttestationObject?.base64EncodedString()
+                        ?? "",
+                    clientDataJSON: attestation.rawClientDataJSON.base64EncodedString()
+                )
+            )
+            let body = WebAuthnNewUserCompleteRegistrationRequest(
+                response: registrationResponse,
+                challenge_id: challengeId,
+                email: email,
+                name: name
+            )
 
-            let body =
-                [
-                    "response": registrationResponseData,
-                    "challengeId": challengeId,
-                    "email": email,
-                    "name": name,
-                ] as [String: Any]
-
-            let result = try await SecureAPIService.shared.post(
-                endpoint: "/api/webauthn/register/verify",
+            let result = try await HamrahAPIClient.shared.post(
+                "/api/webauthn/register/verify",
                 body: body,
-                accessToken: nil,  // No auth needed for new user registration
+                auth: .none,
                 responseType: APIResponse.self,
-                customBaseURL: APIConfiguration.shared.baseURL
             )
 
             // If successful, the user should now be signed in
@@ -277,6 +272,18 @@
                 await authManager.signInWithPasskey(email: email)
             }
         }
+    }
+
+    struct WebAuthnNewUserBeginRegistrationRequest: Encodable {
+        let email: String
+        let name: String
+    }
+
+    struct WebAuthnNewUserCompleteRegistrationRequest: Encodable {
+        let response: WebAuthnRegistrationCredential
+        let challenge_id: String
+        let email: String
+        let name: String
     }
 
     // MARK: - New User Passkey Registration Delegate

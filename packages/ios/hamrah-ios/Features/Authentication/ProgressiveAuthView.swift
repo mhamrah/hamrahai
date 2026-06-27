@@ -144,10 +144,8 @@ struct ProgressiveAuthView: View {
 
     private func initializeAppAttestation() {
         Task {
-            if let token = authManager.accessToken {
-                print("🔐 Initializing App Attestation if needed...")
-                await SecureAPIService.shared.initializeAttestation(accessToken: token)
-            }
+            print("🔐 Initializing App Attestation if needed...")
+            await HamrahAPIClient.shared.initializeAttestationIfNeeded()
         }
     }
 

@@ -51,6 +51,10 @@ Responses:
 - Token responses: access_token, refresh_token, expires_in
 - Session info: session_token (string), and session objects use expires_at
 - Validation results returned or used within the app should prefer is_valid over isValid
+- Web auth is cookie-session based. Do not store bearer, access, refresh, or session tokens in localStorage or sessionStorage.
+- Feature/domain code must call `HamrahApiClient` or an auth/domain wrapper that delegates to it; do not use raw `fetch` for hamrah-api calls.
+- Use request auth policies `auth: "none" | "optional" | "required"` to describe whether a session is needed. The client owns SSR cookie forwarding, `credentials: "include"`, CSRF headers for unsafe methods, JSON parsing, and typed errors.
+- Standard API error categories are `unauthorized`, `session_expired`, `server`, `network`, and `decoding`.
 
 Example session result shape:
 ```ts

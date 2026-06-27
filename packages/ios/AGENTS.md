@@ -79,6 +79,10 @@ hamrah-ios/
 - **Protocol**: JSON over HTTPS with App Attestation
 - **All Persistence**: Use hamrah-api for authoritative data storage
 - **Local Storage**: Only for caching and offline functionality
+- **Request Boundary**: Feature/domain code must call domain APIs (`LinkAPI`, `UserPrefsAPI`, `PasskeyAPI`, `ModelCatalogAPI`, `AuthAPI`-style wrappers), not `URLSession`, `SecureAPIService`, or token-taking helpers.
+- **Transport**: `HamrahAPIClient` owns URL construction, snake_case JSON encoding/decoding, `Authorization: Bearer`, App Attestation headers, trace headers, 401 retry, and typed errors.
+- **Session**: `SessionManager` owns Keychain token reads/writes, refresh rotation, expiry checks, and invalid-session clearing. `KeychainManager` is storage-only.
+- **Policies and Errors**: Use `auth: .none | .optional | .required` at the domain boundary. Standard categories are `unauthorized`, `session_expired`, `server`, `network`, `decoding`, and `attestation`.
 
 ## 🎨 UI/UX Standards (MANDATORY)
 

@@ -35,7 +35,7 @@ export const onPost: RequestHandler = async (event) => {
   try {
     // Create user and session via public API
     const apiClient = createApiClient(event);
-    const authResult = await apiClient.post("/api/auth/native", {
+    const authResult = await apiClient.nativeAuth({
       email: idTokenPayload.email,
       name: idTokenPayload.name || idTokenPayload.email?.split("@")[0],
       provider: "apple",

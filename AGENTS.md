@@ -87,6 +87,14 @@ Be clear and thorough about the feature and implications of every change.
 - If choosing the minimal implementation, name what was intentionally skipped and when it should be added.
 - If the change affects API contracts, database schema, auth, offline behavior, or cross-platform clients, call that out explicitly.
 
+### Client API Boundary
+
+- Feature/domain code must call domain APIs, not raw `fetch`, `URLSession`, or token-aware helpers.
+- Standard request auth policy names are `auth: none | optional | required`.
+- Standard API error categories are `unauthorized`, `session_expired`, `server`, `network`, `decoding`, and `attestation`.
+- Swift clients use `HamrahAPIClient` plus `SessionManager` for bearer tokens, refresh rotation, App Attestation, tracing, and typed errors.
+- Web clients use `HamrahApiClient` for cookie sessions, SSR cookie forwarding, `credentials: "include"`, CSRF headers, JSON parsing, and typed errors. Do not add web bearer tokens to localStorage or sessionStorage.
+
 ### Development Workflow
 
 - Always create a pull request when submitting code changes for review. Do not leave code changes only as local edits unless the user explicitly asks not to open a PR.

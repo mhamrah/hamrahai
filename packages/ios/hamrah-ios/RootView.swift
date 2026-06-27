@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct RootView: View {
+    @EnvironmentObject private var syncEngine: SyncEngine
     @StateObject private var nativeAuthManager = NativeAuthManager()
     @StateObject private var biometricManager = BiometricAuthManager()
 
