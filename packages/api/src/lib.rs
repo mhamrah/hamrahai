@@ -38,9 +38,10 @@ pub mod webauthn;
 
 pub use db::{
     DbPool, Session, Summary, Tag, User, create_session, delete_session_by_token,
-    get_session_by_token, get_summary_for_link, get_user_by_id, get_user_by_session_token,
-    init_pool, list_tags_for_user, purge_expired_sessions, rotate_session, run_migrations,
-    set_link_tags, upsert_tag, upsert_user, upsert_user_profile,
+    get_session_by_token, get_summary_for_link, get_user_by_auth_provider, get_user_by_id,
+    get_user_by_session_token, init_pool, link_user_auth_provider, list_tags_for_user,
+    list_user_auth_provider_names, purge_expired_sessions, rotate_session, run_migrations,
+    set_link_tags, update_user_login_profile, upsert_tag, upsert_user, upsert_user_profile,
 };
 
 // ---------------------------------------------------------------------------

@@ -283,7 +283,7 @@ export class HamrahApiClient {
     return this.fetchApi<ApiAuthResponse>("/api/auth/native", {
       method: "POST",
       body: JSON.stringify(params),
-      auth: "none",
+      auth: "optional",
     });
   }
 }

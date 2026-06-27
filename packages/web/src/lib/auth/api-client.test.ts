@@ -99,7 +99,7 @@ describe("HamrahApiClient", () => {
     );
   });
 
-  it("does not forward SSR cookies for no-auth API calls", async () => {
+  it("forwards SSR cookies for optional native auth account linking", async () => {
     const event = {
       request: new Request("https://hamrah.app/", {
         headers: {
@@ -119,8 +119,9 @@ describe("HamrahApiClient", () => {
       "https://api.hamrah.app/api/auth/native",
       expect.objectContaining({
         credentials: "include",
-        headers: expect.not.objectContaining({
+        headers: expect.objectContaining({
           cookie: "session=session-token; csrf_token=ssr-csrf-token",
+          "X-CSRF-Token": "ssr-csrf-token",
         }),
         method: "POST",
       }),

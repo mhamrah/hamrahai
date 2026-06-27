@@ -38,7 +38,54 @@ hamrahai/
 2. **Authentication**: JWT tokens, WebAuthn passkeys, OAuth (Apple/Google)
 3. **Offline-First**: All clients support offline functionality with server sync
 4. **Security**: App Attestation, certificate pinning, secure token storage
-5. **Testing**: Comprehensive unit and integration test coverage required
+5. **Testing**: Comprehensive unit, integration, and functional regression coverage required
+
+### Default Engineering Mode
+
+Be efficient, not careless. The best change is the smallest correct change after understanding the real flow end to end.
+
+Stop at the first rung that holds:
+
+1. **Does this need to exist at all?** Skip speculative features and say why.
+2. **Already in this codebase?** Reuse existing helpers, types, services, components, query descriptors, and test utilities before writing new ones.
+3. **Stdlib does it?** Prefer standard library and language features over custom code.
+4. **Native platform feature covers it?** Prefer database constraints, browser features, SwiftUI/SwiftData, Qwik primitives, and platform APIs over app-level reinvention.
+5. **Already-installed dependency solves it?** Use it before adding a dependency.
+6. **Can it be one line?** Make it one line if it remains readable and correct.
+7. **Only then:** write the minimum code that works.
+
+Do **not** do shallow work. Never be lazy about understanding, trust-boundary validation, security, accessibility basics, data-loss prevention, or the tests that prove the feature works. For bug fixes, find the root cause by checking sibling callers and shared paths before editing. Fix once at the common layer when that is the smallest correct fix.
+
+### Regression Prevention Contract
+
+Regressions are treated as product failures, not test-suite trivia. Every non-trivial behavior change must leave behind a runnable check that would fail if the feature broke again.
+
+- Prefer one clear functional test that exercises the user-visible workflow over many brittle implementation tests.
+- Add focused unit tests for complex pure logic, parsers, permission checks, conflict resolution, and money/security/time-sensitive behavior.
+- Integration tests must cover API/database boundaries, serialization shape, authentication/session behavior, and offline/sync flows where applicable.
+- Every bug fix must include a regression test that fails on the old behavior unless the bug was configuration-only or impossible to test locally; document that exception in the PR.
+- Tests should use realistic fixtures and assert durable outcomes, not incidental implementation details.
+- Do not weaken, delete, or snapshot-update failing tests without explaining the behavioral reason.
+
+### Database Design Contract
+
+Keep databases simple, explicit, and hard to misuse.
+
+- Model the real domain with the fewest tables and columns that preserve correctness. Avoid speculative tables, generic entity-attribute-value schemas, polymorphic blobs, and premature audit frameworks.
+- Prefer database-enforced integrity: primary keys, foreign keys, unique constraints, not-null constraints, check constraints, indexes that match real queries, and transactional updates.
+- Migrations must be reversible when practical, safe for existing production data, and include backfill/default behavior when adding required fields.
+- Keep stored JSON rare and intentional. If code needs to filter, join, validate, or migrate a field, it should usually be a typed column.
+- Name columns and tables plainly with snake_case. Keep timestamps RFC 3339 at API boundaries and use database-native timestamp types internally.
+- Every schema change needs tests for create/read/update/delete behavior, relevant constraints, and the API response shape that clients consume.
+
+### Change Communication Contract
+
+Be clear and thorough about the feature and implications of every change.
+
+- Before large edits, state the intended behavior, impacted packages, data/API contract changes, and tests that will prove the work.
+- In the final response or PR description, explain what changed, why it changed, user-visible behavior, compatibility/migration impact, security/privacy impact, and exactly what was tested.
+- If choosing the minimal implementation, name what was intentionally skipped and when it should be added.
+- If the change affects API contracts, database schema, auth, offline behavior, or cross-platform clients, call that out explicitly.
 
 ### Client API Boundary
 
@@ -116,6 +163,13 @@ cargo test             # Run all tests
 - Axum route syntax: `{param}` for path parameters (e.g., `/api/users/{id}`)
 - All timestamps in RFC 3339 (ISO 8601) UTC format
 - Consistent error responses with `success`, `error` fields
+
+**Database and Migrations:**
+- Keep PostgreSQL schemas normalized and boring unless a measured query or product need requires otherwise
+- Enforce invariants in the database first, then mirror them in application validation for better errors
+- Use SQLx checked queries where possible and keep query shape close to the handler/service that owns the behavior
+- Add migrations in small, reviewable steps with explicit defaults/backfills for existing rows
+- Add tests that prove constraints, conflict behavior, pagination, and serialization shape
 
 **Deployment:**
 - Endpoint: `https://api.hamrah.app`
@@ -522,9 +576,12 @@ pnpm ios:open
 
 1. **Work in appropriate package directory**
 2. **Follow project-specific standards** (see sections above)
-3. **Run tests** before committing
-4. **Format code** with project formatters
-5. **Update documentation** if changing public interfaces
+3. **Trace the existing flow before editing** - find shared helpers, callers, tests, and package-level AGENTS.md instructions
+4. **Choose the smallest correct implementation** - reuse existing code, stdlib, native platform features, and installed dependencies before adding code or packages
+5. **Add the functional/regression test first or alongside the fix**
+6. **Run tests** before committing
+7. **Format code** with project formatters
+8. **Update documentation** if changing public interfaces
 
 ### Before Committing
 
@@ -555,6 +612,9 @@ pnpm test
 - ❌ Store secrets in code or environment files committed to git
 - ❌ Use camelCase for API request/response JSON keys
 - ❌ Skip tests for new functionality
+- ❌ Ship a bug fix without a regression test unless the exception is documented
+- ❌ Add speculative abstractions, dependencies, tables, queues, caches, or configuration
+- ❌ Hide domain data in JSON blobs when typed columns and constraints fit
 - ❌ Change deployment configs without testing
 - ❌ Use UIKit for iOS UI development (except approved abstractions)
 - ❌ Store sensitive data in UserDefaults (iOS) or localStorage (Web)
@@ -563,13 +623,16 @@ pnpm test
 ### ALWAYS Do These
 
 - ✅ Use snake_case for all wire protocol JSON
-- ✅ Include comprehensive unit tests
+- ✅ Include focused unit tests and at least one functional test for non-trivial feature behavior
+- ✅ Keep code readable, simple, efficient, and well-modularized around existing package boundaries
+- ✅ Keep database schemas plain, constrained, and easy to migrate
 - ✅ Format code before committing
 - ✅ Test offline scenarios (iOS app)
 - ✅ Validate API responses
 - ✅ Use established theme/component systems
 - ✅ Handle errors gracefully with user feedback
 - ✅ Test on both iOS and macOS (for iOS package)
+- ✅ Explain feature behavior, compatibility impact, migration impact, security/privacy impact, and test coverage in the PR
 
 ---
 
@@ -589,12 +652,14 @@ Any change must:
 
 1. ✅ Build successfully in its package
 2. ✅ Pass all existing tests
-3. ✅ Include tests for new functionality
+3. ✅ Include functional/regression tests for new or changed behavior
 4. ✅ Follow project-specific style guidelines
 5. ✅ Not break other packages
 6. ✅ Work in offline scenarios (where applicable)
 7. ✅ Maintain API contract compatibility
 8. ✅ Include updated documentation if needed
+9. ✅ Use the smallest correct implementation after checking existing code and native platform options
+10. ✅ Clearly state user-visible behavior, data/API implications, migration needs, and what was intentionally skipped
 
 ---
 
