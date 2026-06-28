@@ -574,14 +574,15 @@ pnpm ios:open
 
 ### Making Changes
 
-1. **Work in appropriate package directory**
-2. **Follow project-specific standards** (see sections above)
-3. **Trace the existing flow before editing** - find shared helpers, callers, tests, and package-level AGENTS.md instructions
-4. **Choose the smallest correct implementation** - reuse existing code, stdlib, native platform features, and installed dependencies before adding code or packages
-5. **Add the functional/regression test first or alongside the fix**
-6. **Run tests** before committing
-7. **Format code** with project formatters
-8. **Update documentation** if changing public interfaces
+1. **Start from the latest branch state when safe** - if the worktree is clean, fetch and pull/merge the latest target branch before editing to avoid stale-branch conflicts; if local changes exist, inspect them first and do not overwrite user work.
+2. **Work in appropriate package directory**
+3. **Follow project-specific standards** (see sections above)
+4. **Trace the existing flow before editing** - find shared helpers, callers, tests, and package-level AGENTS.md instructions
+5. **Choose the smallest correct implementation** - reuse existing code, stdlib, native platform features, and installed dependencies before adding code or packages
+6. **Add the functional/regression test first or alongside the fix**
+7. **Run tests** before committing
+8. **Format code** with project formatters
+9. **Update documentation** if changing public interfaces
 
 ### Before Committing
 

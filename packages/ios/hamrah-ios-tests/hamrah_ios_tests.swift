@@ -20,16 +20,28 @@ struct hamrah_ios_tests {
     final class MockLinkAPI: LinkAPI {
         var postCallCount = 0
         var getCallCount = 0
+        var capturedPostPayloads: [OutboundLinkPayload] = []
+        var nextPostResult: Result<PostLinkResponse, Error> = .success(
+            PostLinkResponse(serverId: "srv-1", canonicalUrl: "https://example.com/canonical")
+        )
+        var nextDeltaResult: Result<DeltaResponse, Error> = .success(
+            DeltaResponse(links: [], nextCursor: "cursor-next")
+        )
 
         func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse {
             postCallCount += 1
-            return PostLinkResponse(serverId: payload.clientId, canonicalUrl: payload.url)
+            capturedPostPayloads.append(payload)
+            return try nextPostResult.get()
         }
 
         func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
             getCallCount += 1
-            return DeltaResponse(links: [], nextCursor: nil)
+            return try nextDeltaResult.get()
         }
+    }
+
+    enum SyncTestError: Error {
+        case network
     }
 
     @Test func example() async throws {
@@ -235,6 +247,121 @@ struct hamrah_ios_tests {
 
         #expect(api.postCallCount == 1)
         #expect(api.getCallCount == 1)
+    }
+
+    @Test func outboundSyncPostsQueuedLinksAndUpdatesStatus() async throws {
+        let container = try makeInMemoryLinkContainer()
+        let context = container.mainContext
+        let original = URL(string: "https://example.com/path")!
+        let link = LinkEntity(
+            originalUrl: original,
+            canonicalUrl: original,
+            sharedAt: Date(),
+            status: "queued",
+            updatedAt: Date(),
+            createdAt: Date()
+        )
+        context.insert(link)
+        try context.save()
+
+        let api = MockLinkAPI()
+        api.nextPostResult = .success(
+            PostLinkResponse(serverId: "server-123", canonicalUrl: "https://example.com/canonical")
+        )
+        let engine = SyncEngine(api: api, modelContainer: container)
+
+        await engine._testRunSyncNow(reason: "test_outbound_success")
+
+        let saved = try #require(fetchLinks(context).first)
+        #expect(saved.status == "synced")
+        #expect(saved.serverId == "server-123")
+        #expect(saved.canonicalUrl.absoluteString == "https://example.com/canonical")
+        #expect(api.capturedPostPayloads.count == 1)
+        #expect(api.capturedPostPayloads.first?.url == "https://example.com/path")
+    }
+
+    @Test func outboundSyncFailureLeavesLinkQueuedWithError() async throws {
+        let container = try makeInMemoryLinkContainer()
+        let context = container.mainContext
+        let url = URL(string: "https://example.com/failure")!
+        let link = LinkEntity(
+            originalUrl: url,
+            canonicalUrl: url,
+            sharedAt: Date(),
+            status: "queued",
+            updatedAt: Date(),
+            createdAt: Date()
+        )
+        context.insert(link)
+        try context.save()
+
+        let api = MockLinkAPI()
+        api.nextPostResult = .failure(SyncTestError.network)
+        let engine = SyncEngine(api: api, modelContainer: container)
+
+        await engine._testRunSyncNow(reason: "test_outbound_failure")
+
+        let saved = try #require(fetchLinks(context).first)
+        #expect(saved.status == "queued")
+        #expect(saved.attempts == 1)
+        #expect(saved.lastError != nil)
+    }
+
+    @Test func inboundSyncMergesServerLinksAndUpdatesCursor() async throws {
+        let container = try makeInMemoryLinkContainer()
+        let context = container.mainContext
+        let now = Date()
+        let serverLink = ServerLink(
+            serverId: "server-789",
+            originalUrl: "https://example.com/original",
+            canonicalUrl: "https://example.com/canonical",
+            title: "Server Title",
+            snippet: "Snippet",
+            summaryShort: "Short",
+            summaryLong: "Long",
+            lang: "en",
+            tags: ["swift", "sync"],
+            saveCount: 3,
+            status: "synced",
+            sharedAt: now,
+            createdAt: now.addingTimeInterval(-3600)
+        )
+
+        let api = MockLinkAPI()
+        api.nextDeltaResult = .success(
+            DeltaResponse(links: [serverLink], nextCursor: "cursor-2")
+        )
+        let engine = SyncEngine(api: api, modelContainer: container)
+
+        await engine._testRunSyncNow(reason: "test_inbound")
+
+        let saved = try #require(fetchLinks(context).first)
+        #expect(saved.serverId == "server-789")
+        #expect(saved.title == "Server Title")
+        #expect(saved.snippet == "Snippet")
+        #expect(saved.summaryShort == "Short")
+        #expect(saved.summaryLong == "Long")
+        #expect(saved.lang == "en")
+        #expect(saved.saveCount == 3)
+        #expect(saved.status == "synced")
+        #expect(saved.canonicalUrl.absoluteString == "https://example.com/canonical")
+        #expect(saved.tags.map(\.name).sorted() == ["swift", "sync"])
+
+        let cursor = try #require((try? context.fetch(FetchDescriptor<SyncCursor>()))?.first)
+        #expect(cursor.lastUpdatedCursor == "cursor-2")
+        #expect(cursor.lastFullSyncAt != nil)
+    }
+
+    private func makeInMemoryLinkContainer() throws -> ModelContainer {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        return try ModelContainer(
+            for: LinkEntity.self, TagEntity.self, SyncCursor.self, UserPrefs.self,
+            configurations: config
+        )
+    }
+
+    private func fetchLinks(_ context: ModelContext) -> [LinkEntity] {
+        (try? context.fetch(FetchDescriptor<LinkEntity>())) ?? []
     }
 
 }

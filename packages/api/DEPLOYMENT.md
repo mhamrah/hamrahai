@@ -77,6 +77,15 @@ Configure the following GitHub Actions repository variables:
 | `GAR_REPOSITORY` | `hamrah` |
 | `GAR_REGISTRY` | `us-central1-docker.pkg.dev` |
 | `WIF_PROVIDER` | `projects/66020219411/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `APPLE_TEAM_ID` | Apple Developer Team ID used to verify App Attest app IDs |
+| `NEON_PROJECT_ID` | Neon project ID used for API CI/release validation branches |
+| `NEON_PARENT_BRANCH` | Sanitized Neon branch used as the parent for short-lived CI branches |
+
+### Required Repository Secrets
+
+| Secret | Purpose |
+| --- | --- |
+| `NEON_API_KEY` | Creates and deletes short-lived Neon branches for API CI/release validation |
 
 ### Workload Identity Federation Setup
 
@@ -142,10 +151,10 @@ gcloud run deploy hamrah-api \
   --cpu 1 \
   --port 8080 \
   --cpu-throttling \
-  --startup-probe httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=3,failureThreshold=18 \
-  --liveness-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=3,failureThreshold=3 \
-  --set-env-vars "RUST_LOG=info" \
-  --set-secrets "DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest"
+            --startup-probe httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=3,failureThreshold=18 \
+            --liveness-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=3,failureThreshold=3 \
+            --set-env-vars "RUST_LOG=info,APPLE_TEAM_ID=${APPLE_TEAM_ID}" \
+            --set-secrets "DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest"
 ```
 
 ## CI/CD Pipeline

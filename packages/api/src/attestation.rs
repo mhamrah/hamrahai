@@ -79,6 +79,35 @@ fn get_team_id() -> Result<String, String> {
         .map_err(|_| "APPLE_TEAM_ID environment variable not set".to_string())
 }
 
+fn allow_unattested_requests() -> bool {
+    std::env::var("ALLOW_UNATTESTED_IOS_REQUESTS").as_deref() == Ok("true")
+}
+
+fn allowed_bundle_ids() -> Vec<String> {
+    std::env::var("IOS_BUNDLE_IDS")
+        .ok()
+        .map(|ids| {
+            ids.split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .filter(|ids: &Vec<String>| !ids.is_empty())
+        .unwrap_or_else(|| vec!["app.hamrah.ios".to_string()])
+}
+
+fn validate_bundle_id(bundle_id: &str) -> Result<(), String> {
+    if allowed_bundle_ids()
+        .iter()
+        .any(|allowed| allowed == bundle_id)
+    {
+        Ok(())
+    } else {
+        Err("Unsupported App Attest bundle ID".to_string())
+    }
+}
+
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|h| h.to_str().ok())
 }
@@ -130,7 +159,7 @@ async fn store_challenge(
 
 async fn get_challenge(
     pool: &DbPool,
-    challenge_id: &str,
+    challenge_id: Uuid,
 ) -> Result<Option<StoredChallenge>, sqlx::Error> {
     sqlx::query_as::<_, StoredChallenge>(
         "SELECT challenge, bundle_id, expires_at FROM app_attest_challenges WHERE id = $1",
@@ -140,7 +169,7 @@ async fn get_challenge(
     .await
 }
 
-async fn delete_challenge(pool: &DbPool, challenge_id: &str) -> Result<(), sqlx::Error> {
+async fn delete_challenge(pool: &DbPool, challenge_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM app_attest_challenges WHERE id = $1")
         .bind(challenge_id)
         .execute(pool)
@@ -229,6 +258,14 @@ pub async fn challenge(
             error: Some("Only iOS platform is supported".to_string()),
         });
     }
+    if let Err(error) = validate_bundle_id(&request.bundle_id) {
+        return Json(AttestationChallengeResponse {
+            success: false,
+            challenge: None,
+            challenge_id: String::new(),
+            error: Some(error),
+        });
+    }
 
     // Check for simulator
     let user_agent = headers.get("user-agent").and_then(|h| h.to_str().ok());
@@ -296,6 +333,16 @@ pub async fn verify_attestation(
         "App Attestation verify request"
     );
 
+    if let Err(error) = validate_bundle_id(&request.bundle_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AttestationVerifyResponse {
+                success: false,
+                error: Some(error),
+            }),
+        );
+    }
+
     // Check for simulator
     let user_agent = headers.get("user-agent").and_then(|h| h.to_str().ok());
     if is_ios_simulator(user_agent) {
@@ -306,7 +353,9 @@ pub async fn verify_attestation(
         if let Err(e) = store_key(&pool, &request.key_id, &request.bundle_id, &dummy_key, 0).await {
             tracing::error!(error = %e, "Failed to store simulator key");
         }
-        let _ = delete_challenge(&pool, &request.challenge_id).await;
+        if let Ok(challenge_id) = Uuid::parse_str(&request.challenge_id) {
+            let _ = delete_challenge(&pool, challenge_id).await;
+        }
 
         return (
             StatusCode::OK,
@@ -317,8 +366,22 @@ pub async fn verify_attestation(
         );
     }
 
+    let challenge_id = match Uuid::parse_str(&request.challenge_id) {
+        Ok(challenge_id) => challenge_id,
+        Err(_) => {
+            tracing::warn!(challenge_id = %request.challenge_id, "Malformed challenge ID");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(AttestationVerifyResponse {
+                    success: false,
+                    error: Some("Invalid challenge".to_string()),
+                }),
+            );
+        }
+    };
+
     // Fetch challenge
-    let stored_challenge = match get_challenge(&pool, &request.challenge_id).await {
+    let stored_challenge = match get_challenge(&pool, challenge_id).await {
         Ok(Some(ch)) => ch,
         Ok(None) => {
             tracing::warn!(challenge_id = %request.challenge_id, "Challenge not found");
@@ -454,7 +517,7 @@ pub async fn verify_attestation(
     }
 
     // Clean up challenge
-    let _ = delete_challenge(&pool, &request.challenge_id).await;
+    let _ = delete_challenge(&pool, challenge_id).await;
 
     (
         StatusCode::OK,
@@ -637,19 +700,20 @@ async fn verify_request_headers_if_present(
     pool: &DbPool,
     headers: &HeaderMap,
 ) -> Result<(), String> {
-    if header_str(headers, "x-ios-development") == Some("simulator")
-        || header_str(headers, "x-app-attestation-mode") == Some("none")
-    {
+    let explicit_unattested = header_str(headers, "x-ios-development") == Some("simulator")
+        || header_str(headers, "x-app-attestation-mode") == Some("none");
+    if explicit_unattested && allow_unattested_requests() {
         return Ok(());
     }
 
     let Some(key_id) = header_str(headers, "x-ios-app-attest-key") else {
-        return Ok(());
+        return Err("Missing App Attest key".to_string());
     };
     let assertion_base64 = header_str(headers, "x-ios-app-attest-assertion")
         .ok_or_else(|| "Missing App Attest assertion".to_string())?;
     let bundle_id = header_str(headers, "x-ios-app-bundle-id")
         .ok_or_else(|| "Missing App Attest bundle ID".to_string())?;
+    validate_bundle_id(bundle_id)?;
     let client_data_base64 = header_str(headers, "x-request-challenge")
         .ok_or_else(|| "Missing App Attest request challenge".to_string())?;
 
