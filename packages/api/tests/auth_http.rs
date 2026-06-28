@@ -656,6 +656,7 @@ async fn http_user_prefs_round_trips_available_models_and_prunes_unavailable_pre
 
     unsafe {
         env::set_var("GOOGLE_AUTH_TEST_BYPASS", "true");
+        env::set_var("ALLOW_UNATTESTED_IOS_REQUESTS", "true");
     }
 
     let email = format!("prefs-{}@example.com", Uuid::new_v4());
@@ -681,6 +682,7 @@ async fn http_user_prefs_round_trips_available_models_and_prunes_unavailable_pre
         .method("GET")
         .uri("/v1/user/prefs")
         .header("authorization", format!("Bearer {}", tokens.access_token))
+        .header("x-app-attestation-mode", "none")
         .body(Body::empty())
         .unwrap();
     let get_resp = router.clone().oneshot(get_req).await.unwrap();
@@ -705,6 +707,7 @@ async fn http_user_prefs_round_trips_available_models_and_prunes_unavailable_pre
         .uri("/v1/user/prefs")
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {}", tokens.access_token))
+        .header("x-app-attestation-mode", "none")
         .body(Body::from(update_payload.to_string()))
         .unwrap();
     let put_resp = router.clone().oneshot(put_req).await.unwrap();

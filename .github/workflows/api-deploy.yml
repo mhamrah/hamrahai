@@ -35,6 +35,58 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v3.0.1
 
+      - name: Validate release configuration
+        run: |
+          test -n "${{ vars.APPLE_TEAM_ID }}"
+          test -n "${{ vars.NEON_PROJECT_ID }}"
+          test -n "${{ vars.NEON_PARENT_BRANCH }}"
+          test -n "${{ secrets.NEON_API_KEY }}"
+
+      - name: Set Neon branch expiration
+        run: echo "NEON_EXPIRES_AT=$(date -u -d '+1 day' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
+      - name: Create Neon release validation branch
+        id: neon
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          parent_branch: ${{ vars.NEON_PARENT_BRANCH }}
+          branch_name: api-release-${{ github.run_id }}-${{ github.run_attempt }}
+          expires_at: ${{ env.NEON_EXPIRES_AT }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+
+      - name: Format check
+        working-directory: packages/api
+        run: cargo fmt --check
+
+      - name: Install SQLx CLI
+        working-directory: packages/api
+        run: cargo install sqlx-cli --version 0.9.0 --no-default-features --features rustls,postgres --locked
+
+      - name: Run migrations on Neon release validation branch
+        working-directory: packages/api
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+        run: sqlx migrate run --database-url "$DATABASE_URL"
+
+      - name: Clippy
+        working-directory: packages/api
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+          JWT_SECRET: test-jwt-secret-for-api-release-validation
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ALLOW_UNATTESTED_IOS_REQUESTS: "true"
+        run: cargo clippy -- -D warnings
+
+      - name: Run tests
+        working-directory: packages/api
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+          JWT_SECRET: test-jwt-secret-for-api-release-validation
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ALLOW_UNATTESTED_IOS_REQUESTS: "true"
+        run: cargo test
+
       - name: Configure Docker auth
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
 
@@ -62,5 +114,13 @@ jobs:
             --cpu-throttling \
             --startup-probe httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=3,failureThreshold=18 \
             --liveness-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=3,failureThreshold=3 \
-            --set-env-vars "RUST_LOG=info" \
+            --set-env-vars "RUST_LOG=info,APPLE_TEAM_ID=${{ vars.APPLE_TEAM_ID }}" \
             --set-secrets "DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest"
+
+      - name: Delete Neon release validation branch
+        if: always() && steps.neon.outputs.branch_id != ''
+        uses: neondatabase/delete-branch-action@v3.2.1
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch: ${{ steps.neon.outputs.branch_id }}
+          api_key: ${{ secrets.NEON_API_KEY }}

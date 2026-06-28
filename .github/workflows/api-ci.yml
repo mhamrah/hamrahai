@@ -53,14 +53,66 @@ jobs:
         working-directory: .
         run: echo "No API package changes detected."
 
+      - name: Set Neon branch expiration
+        if: steps.changes.outputs.should_run == 'true'
+        working-directory: .
+        run: echo "NEON_EXPIRES_AT=$(date -u -d '+1 day' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
+      - name: Validate Neon CI configuration
+        if: steps.changes.outputs.should_run == 'true'
+        working-directory: .
+        run: |
+          test -n "${{ vars.NEON_PROJECT_ID }}"
+          test -n "${{ vars.NEON_PARENT_BRANCH }}"
+          test -n "${{ secrets.NEON_API_KEY }}"
+
+      - name: Create Neon test branch
+        if: steps.changes.outputs.should_run == 'true'
+        id: neon
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          parent_branch: ${{ vars.NEON_PARENT_BRANCH }}
+          branch_name: api-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          expires_at: ${{ env.NEON_EXPIRES_AT }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+
       - name: Format check
         if: steps.changes.outputs.should_run == 'true'
         run: cargo fmt --check
 
+      - name: Install SQLx CLI
+        if: steps.changes.outputs.should_run == 'true'
+        run: cargo install sqlx-cli --version 0.9.0 --no-default-features --features rustls,postgres --locked
+
+      - name: Run migrations on Neon test branch
+        if: steps.changes.outputs.should_run == 'true'
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+        run: sqlx migrate run --database-url "$DATABASE_URL"
+
       - name: Clippy
         if: steps.changes.outputs.should_run == 'true'
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+          JWT_SECRET: test-jwt-secret-for-api-ci
+          APPLE_TEAM_ID: TEAMID1234
+          ALLOW_UNATTESTED_IOS_REQUESTS: "true"
         run: cargo clippy -- -D warnings
 
       - name: Run tests
         if: steps.changes.outputs.should_run == 'true'
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
+          JWT_SECRET: test-jwt-secret-for-api-ci
+          APPLE_TEAM_ID: TEAMID1234
+          ALLOW_UNATTESTED_IOS_REQUESTS: "true"
         run: cargo test
+
+      - name: Delete Neon test branch
+        if: always() && steps.changes.outputs.should_run == 'true' && steps.neon.outputs.branch_id != ''
+        uses: neondatabase/delete-branch-action@v3.2.1
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch: ${{ steps.neon.outputs.branch_id }}
+          api_key: ${{ secrets.NEON_API_KEY }}

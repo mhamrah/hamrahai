@@ -168,7 +168,7 @@ impl From<Link> for ServerLink {
             lang: None,
             tags: Vec::new(),
             save_count: 1,
-            status: link.state,
+            status: "synced".to_string(),
             shared_at: link.created_at,
             created_at: link.created_at,
         }
