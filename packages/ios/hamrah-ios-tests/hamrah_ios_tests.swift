@@ -69,6 +69,33 @@ struct hamrah_ios_tests {
         #endif
     }
 
+    @Test func appAttestationChallengeResponseDecodesVerifierChallengeBytes() throws {
+        #if os(iOS)
+            let verifierChallenge = "EJbEGFFbB7vxU1+e5bZ6TOsB4b6keGHe3Ih0pQlK7FI="
+            let responseChallenge = Data(verifierChallenge.utf8).base64EncodedString()
+            let jsonData = """
+                {
+                    "success": true,
+                    "challenge": "\(responseChallenge)",
+                    "challenge_id": "challenge-id",
+                    "error": null
+                }
+                """.data(using: .utf8)!
+
+            let response = try JSONDecoder().decode(
+                AttestationChallengeResponse.self,
+                from: jsonData
+            )
+            let challengeData = try #require(
+                response.challenge.flatMap { Data(base64Encoded: $0) }
+            )
+
+            #expect(response.success)
+            #expect(response.challengeId == "challenge-id")
+            #expect(challengeData == Data(verifierChallenge.utf8))
+        #endif
+    }
+
     @Test func unrelatedErrorIsNotRecoverableForAttestationRetry() {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
 
