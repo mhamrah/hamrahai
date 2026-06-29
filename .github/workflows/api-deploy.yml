@@ -21,6 +21,22 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      LOCAL_DATABASE_URL: postgres://postgres:postgres@localhost:5432/hamrah_release
+      NEON_CONFIGURED: ${{ vars.NEON_PROJECT_ID != '' && vars.NEON_PARENT_BRANCH != '' && secrets.NEON_API_KEY != '' }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hamrah_release
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -36,16 +52,20 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3.0.1
 
       - name: Validate release configuration
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
-          test -n "${{ vars.APPLE_TEAM_ID }}"
-          test -n "${{ vars.NEON_PROJECT_ID }}"
-          test -n "${{ vars.NEON_PARENT_BRANCH }}"
-          test -n "${{ secrets.NEON_API_KEY }}"
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "::error::APPLE_TEAM_ID repository variable is required for production App Attest verification."
+            exit 1
+          fi
 
       - name: Set Neon branch expiration
+        if: env.NEON_CONFIGURED == 'true'
         run: echo "NEON_EXPIRES_AT=$(date -u -d '+1 day' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
       - name: Create Neon release validation branch
+        if: env.NEON_CONFIGURED == 'true'
         id: neon
         uses: neondatabase/create-branch-action@v6
         with:
@@ -63,16 +83,21 @@ jobs:
         working-directory: packages/api
         run: cargo install sqlx-cli --version 0.9.0 --no-default-features --features rustls,postgres --locked
 
-      - name: Run migrations on Neon release validation branch
+      - name: Select API release validation database
+        run: |
+          if [ "${NEON_CONFIGURED}" = "true" ]; then
+            echo "DATABASE_URL=${{ steps.neon.outputs.db_url }}" >> "$GITHUB_ENV"
+          else
+            echo "DATABASE_URL=${LOCAL_DATABASE_URL}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run migrations on API release validation database
         working-directory: packages/api
-        env:
-          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
         run: sqlx migrate run --database-url "$DATABASE_URL"
 
       - name: Clippy
         working-directory: packages/api
         env:
-          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
           JWT_SECRET: test-jwt-secret-for-api-release-validation
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           ALLOW_UNATTESTED_IOS_REQUESTS: "true"
@@ -81,7 +106,6 @@ jobs:
       - name: Run tests
         working-directory: packages/api
         env:
-          DATABASE_URL: ${{ steps.neon.outputs.db_url }}
           JWT_SECRET: test-jwt-secret-for-api-release-validation
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           ALLOW_UNATTESTED_IOS_REQUESTS: "true"
@@ -118,7 +142,7 @@ jobs:
             --set-secrets "DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest"
 
       - name: Delete Neon release validation branch
-        if: always() && steps.neon.outputs.branch_id != ''
+        if: always() && env.NEON_CONFIGURED == 'true' && steps.neon.outputs.branch_id != ''
         uses: neondatabase/delete-branch-action@v3.2.1
         with:
           project_id: ${{ vars.NEON_PROJECT_ID }}

@@ -267,16 +267,16 @@ cargo build
 
 This creates `.sqlx/` directory with query metadata for offline compilation.
 
-### CI Database Testing With Neon
+### CI and Deploy Database Testing With Neon
 
-API CI prefers Neon branching for runtime database coverage. When
-`NEON_API_KEY`, `NEON_PROJECT_ID`, and `NEON_PARENT_BRANCH` are configured,
-GitHub Actions creates a short-lived branch from the sanitized parent branch,
-uses the action's `db_url` output as `DATABASE_URL`, runs migrations and tests,
-then deletes the branch. Keep the parent branch migrated and free of production
-user data so CI can exercise real Postgres behavior without touching
-production. If Neon is not configured yet, PR CI falls back to a local Postgres
-service so database-backed tests still run.
+API CI and deploy validation prefer Neon branching for runtime database
+coverage. When `NEON_API_KEY`, `NEON_PROJECT_ID`, and `NEON_PARENT_BRANCH` are
+configured, GitHub Actions creates a short-lived branch from the sanitized
+parent branch, uses the action's `db_url` output as `DATABASE_URL`, runs
+migrations and tests, then deletes the branch. Keep the parent branch migrated
+and free of production user data so CI can exercise real Postgres behavior
+without touching production. If Neon is not configured yet, workflows fall back
+to a local Postgres service so database-backed checks still run.
 
 ### Database Setup
 

@@ -78,10 +78,19 @@ Configure the following GitHub Actions repository variables:
 | `GAR_REGISTRY` | `us-central1-docker.pkg.dev` |
 | `WIF_PROVIDER` | `projects/66020219411/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
 | `APPLE_TEAM_ID` | Apple Developer Team ID used to verify App Attest app IDs |
+
+### Optional Repository Variables
+
+Configure these GitHub Actions repository variables to run API CI and deploy
+validation against short-lived Neon branches. If they are not configured,
+workflows fall back to a local Postgres service for validation.
+
+| Variable | Value |
+| --- | --- |
 | `NEON_PROJECT_ID` | Neon project ID used for API CI/release validation branches |
 | `NEON_PARENT_BRANCH` | Sanitized Neon branch used as the parent for short-lived CI branches |
 
-### Required Repository Secrets
+### Optional Repository Secrets
 
 | Secret | Purpose |
 | --- | --- |
@@ -162,9 +171,11 @@ gcloud run deploy hamrah-api \
 The GitHub Actions workflow (`.github/workflows/api-deploy.yml`) automatically:
 
 1. Authenticates to Google Cloud using Workload Identity Federation
-2. Builds the Docker image
-3. Pushes to Artifact Registry
-4. Deploys to Cloud Run
+2. Runs API format, migration, clippy, and test validation against Neon when
+   configured, otherwise against local Postgres
+3. Builds the Docker image
+4. Pushes to Artifact Registry
+5. Deploys to Cloud Run
 
 Deployments trigger on:
 - Push to `main` branch
