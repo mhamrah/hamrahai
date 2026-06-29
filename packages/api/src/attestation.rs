@@ -112,6 +112,19 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|h| h.to_str().ok())
 }
 
+fn generate_attestation_challenge() -> (String, String) {
+    use rand::RngExt;
+
+    let mut challenge_bytes = [0u8; 32];
+    rand::rng().fill(&mut challenge_bytes);
+
+    let verifier_challenge = base64::engine::general_purpose::STANDARD.encode(challenge_bytes);
+    let response_challenge =
+        base64::engine::general_purpose::STANDARD.encode(verifier_challenge.as_bytes());
+
+    (verifier_challenge, response_challenge)
+}
+
 // ============================================================================
 // Database Types
 // ============================================================================
@@ -280,19 +293,15 @@ pub async fn challenge(
         });
     }
 
-    // Generate cryptographically secure challenge
-    use rand::RngExt;
-    let mut challenge_bytes = [0u8; 32];
-    rand::rng().fill(&mut challenge_bytes);
-
-    let challenge_base64 = base64::engine::general_purpose::STANDARD.encode(challenge_bytes);
+    // Generate cryptographically secure client data for App Attest.
+    let (verifier_challenge, response_challenge) = generate_attestation_challenge();
     let challenge_id = Uuid::new_v4();
 
     // Store challenge
     match store_challenge(
         &pool,
         &challenge_id,
-        &challenge_base64,
+        &verifier_challenge,
         &request.bundle_id,
         &request.platform,
     )
@@ -302,7 +311,7 @@ pub async fn challenge(
             tracing::info!(challenge_id = %challenge_id, "Generated attestation challenge");
             Json(AttestationChallengeResponse {
                 success: true,
-                challenge: Some(challenge_base64),
+                challenge: Some(response_challenge),
                 challenge_id: challenge_id.to_string(),
                 error: None,
             })
@@ -449,25 +458,6 @@ pub async fn verify_attestation(
 
     let app_id = format!("{}.{}", team_id, request.bundle_id);
 
-    // Decode challenge
-    let challenge_bytes =
-        match base64::engine::general_purpose::STANDARD.decode(&stored_challenge.challenge) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to decode challenge");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(AttestationVerifyResponse {
-                        success: false,
-                        error: Some("Internal server error".to_string()),
-                    }),
-                );
-            }
-        };
-
-    let challenge_str =
-        std::str::from_utf8(&challenge_bytes).unwrap_or(&stored_challenge.challenge);
-
     // Parse and verify attestation
     let attestation = match Attestation::from_base64(&request.attestation_object) {
         Ok(att) => att,
@@ -484,19 +474,20 @@ pub async fn verify_attestation(
     };
 
     // Verify attestation
-    let (public_key, _receipt) = match attestation.verify(challenge_str, &app_id, &request.key_id) {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::error!(error = ?e, "Attestation verification failed");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(AttestationVerifyResponse {
-                    success: false,
-                    error: Some(format!("Attestation verification failed: {:?}", e)),
-                }),
-            );
-        }
-    };
+    let (public_key, _receipt) =
+        match attestation.verify(&stored_challenge.challenge, &app_id, &request.key_id) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(error = ?e, "Attestation verification failed");
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(AttestationVerifyResponse {
+                        success: false,
+                        error: Some(format!("Attestation verification failed: {:?}", e)),
+                    }),
+                );
+            }
+        };
 
     tracing::info!(
         key_id = %request.key_id,
@@ -745,4 +736,20 @@ async fn verify_request_headers_if_present(
         .map_err(|error| format!("Failed to update App Attest counter: {error}"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_attestation_response_decodes_to_verifier_challenge_bytes() {
+        let (verifier_challenge, response_challenge) = generate_attestation_challenge();
+        let client_data = base64::engine::general_purpose::STANDARD
+            .decode(response_challenge)
+            .expect("response challenge should be base64-encoded client data");
+
+        assert_eq!(client_data, verifier_challenge.as_bytes());
+        assert!(verifier_challenge.is_ascii());
+    }
 }

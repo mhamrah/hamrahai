@@ -5,6 +5,7 @@ use axum::{
     body::{self, Body},
     http::{Request, StatusCode},
 };
+use base64::Engine;
 use hamrah_server::{
     db::{DbPool, init_pool, run_migrations},
     routes::create_router,
@@ -18,6 +19,7 @@ use uuid::Uuid;
 #[derive(Deserialize)]
 struct AttestationChallengeResponse {
     success: bool,
+    challenge: Option<String>,
     challenge_id: String,
     error: Option<String>,
 }
@@ -143,6 +145,46 @@ async fn attestation_verify_fetches_uuid_challenge_without_database_type_error()
         .unwrap();
     let parsed: ErrorResponse = serde_json::from_slice(&verify_body).unwrap();
     assert_eq!(parsed.error.as_deref(), Some("Invalid attestation object"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn attestation_challenge_response_decodes_to_stored_verifier_challenge() -> anyhow::Result<()>
+{
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let challenge_payload = json!({
+        "platform": "ios",
+        "bundle_id": "app.hamrah.ios"
+    });
+    let challenge_req = Request::builder()
+        .method("POST")
+        .uri("/api/attestation/challenge")
+        .header("content-type", "application/json")
+        .body(Body::from(challenge_payload.to_string()))
+        .unwrap();
+    let challenge_resp = router.clone().oneshot(challenge_req).await.unwrap();
+    assert_eq!(challenge_resp.status(), StatusCode::OK);
+    let challenge_body = body::to_bytes(challenge_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let challenge: AttestationChallengeResponse = serde_json::from_slice(&challenge_body).unwrap();
+    assert!(challenge.success, "{:?}", challenge.error);
+
+    let stored_challenge: String =
+        sqlx::query_scalar("SELECT challenge FROM app_attest_challenges WHERE id = $1")
+            .bind(Uuid::parse_str(&challenge.challenge_id)?)
+            .fetch_one(&pool)
+            .await?;
+    let response_client_data = base64::engine::general_purpose::STANDARD
+        .decode(challenge.challenge.expect("challenge should be present"))
+        .expect("challenge should be base64-encoded client data");
+
+    assert_eq!(response_client_data, stored_challenge.as_bytes());
+    assert!(stored_challenge.is_ascii());
 
     Ok(())
 }
