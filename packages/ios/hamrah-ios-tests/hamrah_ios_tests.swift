@@ -96,6 +96,38 @@ struct hamrah_ios_tests {
         #endif
     }
 
+    @Test func appAttestationRequestChallengeDataIsSignedJsonWithChallenge() throws {
+        let url = try #require(URL(string: "https://api.hamrah.app/v1/user/prefs"))
+        let body = #"{"default_model":"@cf/zai-org/glm-4.7-flash"}"#.data(using: .utf8)!
+        let clientData = try HamrahAPIClient.requestChallengeData(
+            url: url,
+            method: .PUT,
+            body: body,
+            issuedAt: Date(timeIntervalSince1970: 1_782_700_000),
+            challenge: "request-nonce"
+        )
+        let decoded = try JSONDecoder().decode(AppAttestRequestClientData.self, from: clientData)
+
+        #expect(decoded.challenge == "request-nonce")
+        #expect(decoded.method == "PUT")
+        #expect(decoded.url == "https://api.hamrah.app/v1/user/prefs")
+        #expect(
+            decoded.bodySha256
+                == "1747b5a7871b52686eb992730413af1f62df1d0ca9a814ca6a8b4737c20a1a7c"
+        )
+        #expect(decoded.issuedAt == 1_782_700_000)
+    }
+
+    @Test func unauthorizedAppAttestServerErrorMapsToAttestationError() throws {
+        let data = #"{"success":false,"error":"App Attest assertion verification failed"}"#
+            .data(using: .utf8)!
+
+        #expect(
+            HamrahAPIClient.unauthorizedResponseError(data: data)
+                == .attestation("App Attest assertion verification failed")
+        )
+    }
+
     @Test func unrelatedErrorIsNotRecoverableForAttestationRetry() {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
 
