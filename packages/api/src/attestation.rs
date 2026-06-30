@@ -57,6 +57,11 @@ pub struct AssertionResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AppAttestRequestClientData {
+    challenge: String,
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -123,6 +128,15 @@ fn generate_attestation_challenge() -> (String, String) {
         base64::engine::general_purpose::STANDARD.encode(verifier_challenge.as_bytes());
 
     (verifier_challenge, response_challenge)
+}
+
+fn request_client_data_challenge(client_data_bytes: &[u8]) -> Result<String, String> {
+    let client_data: AppAttestRequestClientData = serde_json::from_slice(client_data_bytes)
+        .map_err(|_| "Invalid App Attest client data".to_string())?;
+    if client_data.challenge.trim().is_empty() {
+        return Err("Invalid App Attest client data".to_string());
+    }
+    Ok(client_data.challenge)
 }
 
 // ============================================================================
@@ -606,6 +620,19 @@ pub async fn verify_assertion(
                 );
             }
         };
+    let request_challenge = match request_client_data_challenge(&client_data_bytes) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            tracing::error!(error = %error, "Failed to parse App Attest client data");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(AssertionResponse {
+                    success: false,
+                    error: Some(error),
+                }),
+            );
+        }
+    };
 
     // Parse assertion
     let assertion = match Assertion::from_base64(&request.assertion) {
@@ -628,7 +655,7 @@ pub async fn verify_assertion(
         &app_id,
         stored_key.public_key,
         stored_key.counter as u32,
-        &request.client_data,
+        &request_challenge,
     ) {
         tracing::error!(error = ?e, "Assertion verification failed");
         return (
@@ -718,6 +745,7 @@ async fn verify_request_headers_if_present(
     let client_data_bytes = base64::engine::general_purpose::STANDARD
         .decode(client_data_base64)
         .map_err(|_| "Invalid App Attest request challenge encoding".to_string())?;
+    let request_challenge = request_client_data_challenge(&client_data_bytes)?;
     let assertion = Assertion::from_base64(assertion_base64)
         .map_err(|_| "Invalid App Attest assertion".to_string())?;
 
@@ -727,7 +755,7 @@ async fn verify_request_headers_if_present(
             &app_id,
             stored_key.public_key,
             stored_key.counter as u32,
-            client_data_base64,
+            &request_challenge,
         )
         .map_err(|_| "App Attest assertion verification failed".to_string())?;
 
@@ -751,5 +779,25 @@ mod tests {
 
         assert_eq!(client_data, verifier_challenge.as_bytes());
         assert!(verifier_challenge.is_ascii());
+    }
+
+    #[test]
+    fn request_client_data_challenge_extracts_signed_challenge() {
+        let client_data = br#"{"challenge":"request-nonce","method":"GET"}"#;
+
+        assert_eq!(
+            request_client_data_challenge(client_data).as_deref(),
+            Ok("request-nonce")
+        );
+    }
+
+    #[test]
+    fn request_client_data_challenge_rejects_legacy_plaintext_challenge() {
+        let client_data = b"GET:https://api.hamrah.app/v1/user/prefs:123";
+
+        assert_eq!(
+            request_client_data_challenge(client_data).unwrap_err(),
+            "Invalid App Attest client data"
+        );
     }
 }

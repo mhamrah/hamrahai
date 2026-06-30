@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 #if os(iOS)
@@ -351,7 +352,7 @@ final class HamrahAPIClient {
 
         request.httpBody = requestBody
 
-        let challenge = generateRequestChallenge(url: url, method: method, body: requestBody)
+        let challenge = try generateRequestChallenge(url: url, method: method, body: requestBody)
         try await applyAttestationHeaders(
             to: &request,
             challenge: challenge,
@@ -373,6 +374,7 @@ final class HamrahAPIClient {
         }
 
         if httpResponse.statusCode == 401 {
+            let fallbackError = Self.unauthorizedResponseError(data: data)
             return try await handleUnauthorized(
                 method,
                 endpoint,
@@ -380,7 +382,8 @@ final class HamrahAPIClient {
                 body: body,
                 customBaseURL: customBaseURL,
                 responseType: responseType,
-                retryState: retryState
+                retryState: retryState,
+                fallbackError: fallbackError
             )
         }
 
@@ -414,7 +417,8 @@ final class HamrahAPIClient {
         body: Encodable?,
         customBaseURL: String?,
         responseType: Response.Type,
-        retryState: RetryState
+        retryState: RetryState,
+        fallbackError: HamrahAPIError
     ) async throws -> Response {
         switch (auth, retryState) {
         case (.required, .initial):
@@ -446,7 +450,7 @@ final class HamrahAPIClient {
                 retryState: .recoveredAttestation
             )
         default:
-            throw HamrahAPIError.unauthorized
+            throw fallbackError
         }
     }
 
@@ -547,13 +551,26 @@ final class HamrahAPIClient {
         }
     }
 
-    private func generateRequestChallenge(url: URL, method: HTTPMethod, body: Data?) -> Data {
-        var challengeString = "\(method.rawValue):\(url.absoluteString)"
-        if let body, let bodyString = String(data: body, encoding: .utf8) {
-            challengeString += ":\(bodyString)"
-        }
-        challengeString += ":\(Date().timeIntervalSince1970)"
-        return challengeString.data(using: .utf8) ?? Data()
+    private func generateRequestChallenge(url: URL, method: HTTPMethod, body: Data?) throws -> Data {
+        try Self.requestChallengeData(url: url, method: method, body: body)
+    }
+
+    static func requestChallengeData(
+        url: URL,
+        method: HTTPMethod,
+        body: Data?,
+        issuedAt: Date = Date(),
+        challenge: String = UUID().uuidString.lowercased()
+    ) throws -> Data {
+        let bodyHash = body.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() }
+        let clientData = AppAttestRequestClientData(
+            challenge: challenge,
+            method: method.rawValue,
+            url: url.absoluteString,
+            bodySha256: bodyHash,
+            issuedAt: issuedAt.timeIntervalSince1970
+        )
+        return try JSONEncoder.iso8601.encode(clientData)
     }
 
     private func serverError(statusCode: Int, data: Data) -> HamrahAPIError {
@@ -563,6 +580,23 @@ final class HamrahAPIClient {
             return .server(statusCode, errorMessage)
         }
         return .server(statusCode, "Request failed")
+    }
+
+    static func unauthorizedResponseError(data: Data) -> HamrahAPIError {
+        guard
+            let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let errorMessage = errorData["error"] as? String
+        else {
+            return .unauthorized
+        }
+
+        if errorMessage.localizedCaseInsensitiveContains("attest")
+            || errorMessage.localizedCaseInsensitiveContains("attestation")
+        {
+            return .attestation(errorMessage)
+        }
+
+        return .unauthorized
     }
 
     private func decodeJWTSubject(from token: String) -> String? {
@@ -630,6 +664,22 @@ final class HamrahAPIClient {
         #endif
 
         return false
+    }
+}
+
+struct AppAttestRequestClientData: Codable, Equatable {
+    let challenge: String
+    let method: String
+    let url: String
+    let bodySha256: String?
+    let issuedAt: TimeInterval
+
+    enum CodingKeys: String, CodingKey {
+        case challenge
+        case method
+        case url
+        case bodySha256 = "body_sha256"
+        case issuedAt = "issued_at"
     }
 }
 
