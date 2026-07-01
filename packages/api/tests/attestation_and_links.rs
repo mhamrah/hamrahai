@@ -42,6 +42,17 @@ struct CreateLinkResponse {
 }
 
 #[derive(Deserialize)]
+struct LinkMutationResponse {
+    success: bool,
+    link: ServerLink,
+}
+
+#[derive(Deserialize)]
+struct DeleteLinkResponse {
+    success: bool,
+}
+
+#[derive(Deserialize)]
 struct LinkDeltaResponse {
     links: Vec<ServerLink>,
     next_cursor: Option<String>,
@@ -297,6 +308,114 @@ async fn native_link_create_and_delta_list_round_trip_with_explicit_test_attesta
     assert_eq!(saved.canonical_url, url);
     assert_eq!(saved.title.as_deref(), Some("A saved article"));
     assert_eq!(saved.status, "synced");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_link_archive_and_delete_are_persisted() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+    unsafe {
+        env::set_var("ALLOW_UNATTESTED_IOS_REQUESTS", "true");
+    }
+    let access_token = login(&router).await;
+
+    let url = format!("https://example.com/archive/{}", Uuid::new_v4());
+    let create_payload = json!({
+        "client_id": Uuid::new_v4().to_string(),
+        "url": url
+    });
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/v1/links")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-app-attestation-mode", "none")
+        .body(Body::from(create_payload.to_string()))
+        .unwrap();
+    let create_resp = router.clone().oneshot(create_req).await.unwrap();
+    assert_eq!(create_resp.status(), StatusCode::OK);
+    let create_body = body::to_bytes(create_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let created: CreateLinkResponse = serde_json::from_slice(&create_body).unwrap();
+
+    let archive_payload = json!({ "status": "archived" });
+    let archive_req = Request::builder()
+        .method("PATCH")
+        .uri(format!("/v1/links/{}", created.id))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-app-attestation-mode", "none")
+        .body(Body::from(archive_payload.to_string()))
+        .unwrap();
+    let archive_resp = router.clone().oneshot(archive_req).await.unwrap();
+    assert_eq!(archive_resp.status(), StatusCode::OK);
+    let archive_body = body::to_bytes(archive_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let archived: LinkMutationResponse = serde_json::from_slice(&archive_body).unwrap();
+    assert!(archived.success);
+    assert_eq!(archived.link.id, created.id);
+    assert_eq!(archived.link.status, "archived");
+
+    let list_req = Request::builder()
+        .method("GET")
+        .uri("/v1/links?since=&limit=100")
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-app-attestation-mode", "none")
+        .body(Body::empty())
+        .unwrap();
+    let list_resp = router.clone().oneshot(list_req).await.unwrap();
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let list_body = body::to_bytes(list_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let delta: LinkDeltaResponse = serde_json::from_slice(&list_body).unwrap();
+    let listed = delta
+        .links
+        .iter()
+        .find(|link| link.id == created.id)
+        .expect("archived link should remain in delta");
+    assert_eq!(listed.status, "archived");
+
+    let delete_req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/v1/links/{}", created.id))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-app-attestation-mode", "none")
+        .body(Body::empty())
+        .unwrap();
+    let delete_resp = router.clone().oneshot(delete_req).await.unwrap();
+    assert_eq!(delete_resp.status(), StatusCode::OK);
+    let delete_body = body::to_bytes(delete_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let deleted: DeleteLinkResponse = serde_json::from_slice(&delete_body).unwrap();
+    assert!(deleted.success);
+
+    let list_after_delete_req = Request::builder()
+        .method("GET")
+        .uri("/v1/links?since=&limit=100")
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-app-attestation-mode", "none")
+        .body(Body::empty())
+        .unwrap();
+    let list_after_delete_resp = router.clone().oneshot(list_after_delete_req).await.unwrap();
+    assert_eq!(list_after_delete_resp.status(), StatusCode::OK);
+    let list_after_delete_body = body::to_bytes(list_after_delete_resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let delta_after_delete: LinkDeltaResponse =
+        serde_json::from_slice(&list_after_delete_body).unwrap();
+    let deleted_link = delta_after_delete
+        .links
+        .iter()
+        .find(|link| link.id == created.id)
+        .expect("deleted link tombstone should remain in delta");
+    assert_eq!(deleted_link.status, "deleted");
 
     Ok(())
 }

@@ -18,13 +18,14 @@ struct InboxView: View {
     @State private var sort: LinkSort = .recent
     @State private var showFailedOnly: Bool = false
     @State private var syncing: Bool = false
+    private let linkApi: LinkAPI = SecureAPILinkClient()
 
     // Query all links
     @Query var allLinks: [LinkEntity]
 
     // Computed property for dynamic filtering and sorting
     var links: [LinkEntity] {
-        var filtered = allLinks.filter { $0.status != "archived" }
+        var filtered = allLinks.filter { $0.status != "archived" && $0.status != "deleted" }
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let term = searchText
             filtered = filtered.filter {
@@ -130,22 +131,50 @@ struct InboxView: View {
     }
 
     private func archiveLink(_ link: LinkEntity) {
-        link.status = "archived"
-        link.updatedAt = Date()
-        saveContext()
+        let localId = link.localId
+        let serverId = link.serverId
+
+        Task { @MainActor in
+            do {
+                if let serverId {
+                    _ = try await linkApi.updateLink(serverId: serverId, status: "archived")
+                }
+                guard let link = linkEntity(with: localId) else { return }
+                link.status = "archived"
+                link.updatedAt = Date()
+                try modelContext.save()
+            } catch {
+                assertionFailure("Failed to archive link: \(error)")
+            }
+        }
     }
 
     private func deleteLink(_ link: LinkEntity) {
-        modelContext.delete(link)
-        saveContext()
+        let localId = link.localId
+        let serverId = link.serverId
+
+        Task { @MainActor in
+            do {
+                if let serverId {
+                    try await linkApi.deleteLink(serverId: serverId)
+                }
+                guard let link = linkEntity(with: localId) else { return }
+                modelContext.delete(link)
+                try modelContext.save()
+            } catch {
+                assertionFailure("Failed to delete link: \(error)")
+            }
+        }
     }
 
-    private func saveContext() {
-        do {
-            try modelContext.save()
-        } catch {
-            assertionFailure("Failed to save inbox change: \(error)")
-        }
+    private func linkEntity(with localId: UUID) -> LinkEntity? {
+        var descriptor = FetchDescriptor<LinkEntity>(
+            predicate: #Predicate { link in
+                link.localId == localId
+            }
+        )
+        descriptor.fetchLimit = 1
+        return try? modelContext.fetch(descriptor).first
     }
 
     private func runSync() async {

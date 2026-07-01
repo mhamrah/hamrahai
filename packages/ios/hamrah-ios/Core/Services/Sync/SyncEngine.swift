@@ -235,6 +235,13 @@ final class SyncEngine: ObservableObject {
             return
         }
 
+        if serverLink.status == "deleted" {
+            if let link = links.first {
+                context.delete(link)
+            }
+            return
+        }
+
         let link =
             links.first
             ?? LinkEntity(
@@ -256,7 +263,7 @@ final class SyncEngine: ObservableObject {
         link.lang = serverLink.lang
         link.saveCount = serverLink.saveCount
         link.status = serverLink.status
-        link.updatedAt = Date()
+        link.updatedAt = serverLink.updatedAt ?? Date()
         link.serverId = serverLink.serverId
 
         // Replace canonicalUrl if server canonicalized it
@@ -324,6 +331,8 @@ extension SyncCursor {
 protocol LinkAPI {
     func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse
     func getLinks(since: String, limit: Int) async throws -> DeltaResponse
+    func updateLink(serverId: String, status: String) async throws -> ServerLink
+    func deleteLink(serverId: String) async throws
 }
 
 #if DEBUG
@@ -335,6 +344,26 @@ protocol LinkAPI {
         func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
             DeltaResponse(links: [], nextCursor: nil)
         }
+
+        func updateLink(serverId: String, status: String) async throws -> ServerLink {
+            ServerLink(
+                serverId: serverId,
+                originalUrl: "https://example.com",
+                canonicalUrl: "https://example.com",
+                title: nil,
+                snippet: nil,
+                summaryShort: nil,
+                summaryLong: nil,
+                lang: nil,
+                tags: [],
+                saveCount: 1,
+                status: status,
+                sharedAt: Date(),
+                createdAt: Date()
+            )
+        }
+
+        func deleteLink(serverId: String) async throws {}
     }
 #endif
 
@@ -378,6 +407,19 @@ struct DeltaResponse: Codable {
     }
 }
 
+struct UpdateLinkRequest: Encodable {
+    let status: String
+}
+
+struct LinkMutationResponse: Decodable {
+    let success: Bool
+    let link: ServerLink
+}
+
+struct DeleteLinkResponse: Decodable {
+    let success: Bool
+}
+
 struct ServerLink: Codable {
     let serverId: String?
     let originalUrl: String
@@ -392,6 +434,7 @@ struct ServerLink: Codable {
     let status: String
     let sharedAt: Date
     let createdAt: Date
+    let updatedAt: Date? = nil
 
     enum CodingKeys: String, CodingKey {
         case serverId = "id"
@@ -407,6 +450,7 @@ struct ServerLink: Codable {
         case status
         case sharedAt = "shared_at"
         case createdAt = "created_at"
+        case updatedAt = "updated_at"
     }
 }
 
@@ -438,6 +482,24 @@ final class SecureAPILinkClient: LinkAPI {
             endpoint,
             auth: .required,
             responseType: DeltaResponse.self
+        )
+    }
+
+    func updateLink(serverId: String, status: String) async throws -> ServerLink {
+        let response = try await HamrahAPIClient.shared.patch(
+            "/v1/links/\(serverId)",
+            body: UpdateLinkRequest(status: status),
+            auth: .required,
+            responseType: LinkMutationResponse.self
+        )
+        return response.link
+    }
+
+    func deleteLink(serverId: String) async throws {
+        _ = try await HamrahAPIClient.shared.delete(
+            "/v1/links/\(serverId)",
+            auth: .required,
+            responseType: DeleteLinkResponse.self
         )
     }
 }

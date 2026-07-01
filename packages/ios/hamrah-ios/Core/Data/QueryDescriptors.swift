@@ -19,7 +19,7 @@ struct LinkQueryDescriptors {
         sort: LinkSort = .recent
     ) -> FetchDescriptor<LinkEntity> {
         var descriptor = FetchDescriptor<LinkEntity>(
-            predicate: #Predicate<LinkEntity> { $0.status != "archived" }
+            predicate: #Predicate<LinkEntity> { $0.status != "archived" && $0.status != "deleted" }
         )
         descriptor.fetchLimit = limit
         descriptor.sortBy = sort.sortDescriptors
@@ -28,7 +28,7 @@ struct LinkQueryDescriptors {
 
     static func recent(limit: Int = 20) -> FetchDescriptor<LinkEntity> {
         var descriptor = FetchDescriptor<LinkEntity>(
-            predicate: #Predicate<LinkEntity> { $0.status != "archived" }
+            predicate: #Predicate<LinkEntity> { $0.status != "archived" && $0.status != "deleted" }
         )
         descriptor.fetchLimit = limit
         descriptor.sortBy = [SortDescriptor(\.updatedAt, order: .reverse)]
@@ -63,7 +63,7 @@ struct LinkQueryDescriptors {
         sort: LinkSort = .recent
     ) -> FetchDescriptor<LinkEntity> {
         let predicate = #Predicate<LinkEntity> {
-            $0.status != "archived"
+            $0.status != "archived" && $0.status != "deleted"
                 && (($0.title ?? "").localizedStandardContains(term)
                 || $0.originalUrl.absoluteString.localizedStandardContains(term)
                 || ($0.snippet ?? "").localizedStandardContains(term)
@@ -81,7 +81,8 @@ struct LinkQueryDescriptors {
         limit: Int = 50
     ) -> FetchDescriptor<LinkEntity> {
         let predicate = #Predicate<LinkEntity> {
-            $0.status != "archived" && $0.canonicalUrl.absoluteString.contains(domain)
+            $0.status != "archived" && $0.status != "deleted"
+                && $0.canonicalUrl.absoluteString.contains(domain)
         }
 
         var descriptor = FetchDescriptor<LinkEntity>(predicate: predicate)
@@ -95,7 +96,8 @@ struct LinkQueryDescriptors {
         limit: Int = 50
     ) -> FetchDescriptor<LinkEntity> {
         let predicate = #Predicate<LinkEntity> {
-            $0.status != "archived" && $0.tags.contains { $0.name == tagName }
+            $0.status != "archived" && $0.status != "deleted"
+                && $0.tags.contains { $0.name == tagName }
         }
 
         var descriptor = FetchDescriptor<LinkEntity>(predicate: predicate)
@@ -112,7 +114,8 @@ struct LinkQueryDescriptors {
         limit: Int = 50
     ) -> FetchDescriptor<LinkEntity> {
         let predicate = #Predicate<LinkEntity> {
-            $0.status != "archived" && $0.createdAt >= startDate && $0.createdAt <= endDate
+            $0.status != "archived" && $0.status != "deleted" && $0.createdAt >= startDate
+                && $0.createdAt <= endDate
         }
 
         var descriptor = FetchDescriptor<LinkEntity>(predicate: predicate)
@@ -126,7 +129,7 @@ struct LinkQueryDescriptors {
         limit: Int = 50
     ) -> FetchDescriptor<LinkEntity> {
         let predicate = #Predicate<LinkEntity> {
-            $0.status != "archived" && $0.updatedAt >= date
+            $0.status != "archived" && $0.status != "deleted" && $0.updatedAt >= date
         }
 
         var descriptor = FetchDescriptor<LinkEntity>(predicate: predicate)
@@ -162,7 +165,9 @@ struct LinkQueryDescriptors {
             let statusPredicate = #Predicate<LinkEntity> { $0.status == status }
             predicates.append(statusPredicate)
         } else {
-            let notArchivedPredicate = #Predicate<LinkEntity> { $0.status != "archived" }
+            let notArchivedPredicate = #Predicate<LinkEntity> {
+                $0.status != "archived" && $0.status != "deleted"
+            }
             predicates.append(notArchivedPredicate)
         }
 
