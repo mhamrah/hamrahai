@@ -116,12 +116,12 @@ final class SyncEngine: ObservableObject {
         }
 
         let context = modelContainer.mainContext
-        queuedLinkCount = queuedLinks(context).count
+        queuedLinkCount = outboundRetryCandidates(context).count
         logger.info("Starting sync; reason=\(reason, privacy: .public)")
 
         await syncOutboundLinks(context: context)
         await syncInboundLinks(context: context)
-        queuedLinkCount = queuedLinks(context).count
+        queuedLinkCount = outboundRetryCandidates(context).count
         lastSyncAt = Date()
 
         logger.info("Finished sync; reason=\(reason, privacy: .public)")
@@ -129,9 +129,13 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Outbound
 
-    private func queuedLinks(_ context: ModelContext) -> [LinkEntity] {
+    private func outboundRetryCandidates(_ context: ModelContext) -> [LinkEntity] {
         (try? context.fetch(
-            FetchDescriptor<LinkEntity>(predicate: #Predicate { $0.status == "queued" })
+            FetchDescriptor<LinkEntity>(
+                predicate: #Predicate {
+                    $0.status == "queued" || ($0.status == "failed" && $0.serverId == nil)
+                }
+            )
         )) ?? []
     }
 
@@ -151,6 +155,7 @@ final class SyncEngine: ObservableObject {
             link.canonicalUrl = canonURL
         }
         link.status = "synced"
+        link.attempts = 0
         link.updatedAt = Date()
         link.lastError = nil
     }
@@ -158,7 +163,7 @@ final class SyncEngine: ObservableObject {
     private func markFailure(_ link: LinkEntity, error: Error) {
         link.attempts += 1
         link.lastError = error.localizedDescription
-        if link.attempts > 5 { link.status = "failed" }
+        link.status = link.attempts >= 5 ? "failed" : "queued"
         link.updatedAt = Date()
     }
 
@@ -169,8 +174,9 @@ final class SyncEngine: ObservableObject {
     private func syncOutboundLinks(context: ModelContext) async {
         let prefs = currentPrefs(context)
 
-        for link in queuedLinks(context) {
+        for link in outboundRetryCandidates(context) {
             do {
+                link.status = "syncing"
                 let resp = try await api.postLink(
                     payload: payload(for: link, prefs: prefs)
                 )

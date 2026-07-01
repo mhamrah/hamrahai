@@ -98,6 +98,22 @@ final class InboxViewModel: BaseViewModel {
         deleteLink(link)
     }
 
+    func archiveLink(_ link: LinkEntity) {
+        link.status = "archived"
+        link.updatedAt = Date()
+
+        do {
+            try modelContext.save()
+        } catch {
+            handleError(error)
+        }
+    }
+
+    func archiveLink(localId: UUID) {
+        guard let link = link(withLocalId: localId) else { return }
+        archiveLink(link)
+    }
+
     func retrySync(for link: LinkEntity) {
         link.status = "queued"
         link.attempts = 0

@@ -24,7 +24,7 @@ struct InboxView: View {
 
     // Computed property for dynamic filtering and sorting
     var links: [LinkEntity] {
-        var filtered = allLinks
+        var filtered = allLinks.filter { $0.status != "archived" }
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let term = searchText
             filtered = filtered.filter {
@@ -72,6 +72,32 @@ struct InboxView: View {
                                 Label("Open Original", systemImage: "safari")
                             }
 
+                            Button {
+                                archiveLink(link)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+
+                            Button(role: .destructive) {
+                                deleteLink(link)
+                            } label: {
+                                Label("Delete", systemImage: Theme.Icons.delete)
+                            }
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button {
+                                archiveLink(link)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                            .tint(.blue)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                deleteLink(link)
+                            } label: {
+                                Label("Delete", systemImage: Theme.Icons.delete)
+                            }
                         }
                     }
                 }
@@ -101,6 +127,25 @@ struct InboxView: View {
 
     private func openOriginal(_ link: LinkEntity) {
         openURL(link.canonicalUrl)
+    }
+
+    private func archiveLink(_ link: LinkEntity) {
+        link.status = "archived"
+        link.updatedAt = Date()
+        saveContext()
+    }
+
+    private func deleteLink(_ link: LinkEntity) {
+        modelContext.delete(link)
+        saveContext()
+    }
+
+    private func saveContext() {
+        do {
+            try modelContext.save()
+        } catch {
+            assertionFailure("Failed to save inbox change: \(error)")
+        }
     }
 
     private func runSync() async {
