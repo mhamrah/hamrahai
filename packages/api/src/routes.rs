@@ -109,6 +109,33 @@ async fn create_link_wrapper(
         .into_response()
 }
 
+async fn update_link_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    path: axum::extract::Path<uuid::Uuid>,
+    json: axum::Json<links::UpdateLinkRequest>,
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    links::update_link(axum::extract::State(pool), headers, path, json)
+        .await
+        .into_response()
+}
+
+async fn delete_link_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    path: axum::extract::Path<uuid::Uuid>,
+) -> Response {
+    if let Some(response) = attestation::reject_invalid_request_headers(&pool, &headers).await {
+        return response;
+    }
+    links::delete_link(axum::extract::State(pool), headers, path)
+        .await
+        .into_response()
+}
+
 async fn me_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
@@ -267,6 +294,10 @@ pub fn create_router(pool: DbPool) -> Router {
         .route(
             "/v1/links",
             get(list_links_wrapper).post(create_link_wrapper),
+        )
+        .route(
+            "/v1/links/{id}",
+            patch(update_link_wrapper).delete(delete_link_wrapper),
         )
         .route("/v1/users/me", get(me_wrapper))
         .route(

@@ -21,16 +21,35 @@ final class SyncEngineTests: XCTestCase {
             )
         )
 
-        func postLink(payload: OutboundLinkPayload, token: String?) async throws -> PostLinkResponse
-        {
+        func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse {
             capturedPostPayloads.append(payload)
             return try nextPostResult.get()
         }
 
-        func getLinks(since: String, limit: Int, token: String?) async throws -> DeltaResponse {
+        func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
             getLinksCallCount += 1
             return try nextDeltaResult.get()
         }
+
+        func updateLink(serverId: String, status: String) async throws -> ServerLink {
+            ServerLink(
+                serverId: serverId,
+                originalUrl: "https://example.com",
+                canonicalUrl: "https://example.com",
+                title: nil,
+                snippet: nil,
+                summaryShort: nil,
+                summaryLong: nil,
+                lang: nil,
+                tags: [],
+                saveCount: 1,
+                status: status,
+                sharedAt: Date(),
+                createdAt: Date()
+            )
+        }
+
+        func deleteLink(serverId: String) async throws {}
     }
 
     enum TestError: Error {
@@ -87,8 +106,7 @@ final class SyncEngineTests: XCTestCase {
 
         let engine = SyncEngine(
             api: api,
-            modelContainer: container,
-            accessTokenProvider: { "test-token" }
+            modelContainer: container
         )
 
         await engine._testRunSyncNow(reason: "test")
@@ -103,39 +121,7 @@ final class SyncEngineTests: XCTestCase {
 
         XCTAssertEqual(api.capturedPostPayloads.count, 1)
         let payload = try XCTUnwrap(api.capturedPostPayloads.first)
-        XCTAssertEqual(payload.originalUrl, "https://example.com/path")
-    }
-
-    func testSyncWithoutAccessTokenSkipsNetworkAndKeepsQueuedLinksUntouched() async throws {
-        let container = try makeInMemoryContainer()
-        let context = container.mainContext
-        let url = URL(string: "https://example.com/queued")!
-        let link = LinkEntity(
-            originalUrl: url,
-            canonicalUrl: url,
-            sharedAt: Date(),
-            status: "queued",
-            updatedAt: Date(),
-            createdAt: Date()
-        )
-        context.insert(link)
-        try context.save()
-
-        let api = MockAPI()
-        let engine = SyncEngine(
-            api: api,
-            modelContainer: container,
-            accessTokenProvider: { nil }
-        )
-
-        await engine._testRunSyncNow(reason: "test_no_token")
-
-        let saved = try XCTUnwrap(fetchAllLinks(context).first)
-        XCTAssertEqual(saved.status, "queued")
-        XCTAssertEqual(saved.attempts, 0)
-        XCTAssertNil(saved.lastError)
-        XCTAssertTrue(api.capturedPostPayloads.isEmpty)
-        XCTAssertEqual(api.getLinksCallCount, 0)
+        XCTAssertEqual(payload.url, "https://example.com/path")
     }
 
     func testOutboundSync_failureIncrementsAttemptsAndLeavesQueued() async throws {
@@ -161,8 +147,7 @@ final class SyncEngineTests: XCTestCase {
 
         let engine = SyncEngine(
             api: api,
-            modelContainer: container,
-            accessTokenProvider: { "test-token" }
+            modelContainer: container
         )
 
         await engine._testRunSyncNow(reason: "test")
@@ -173,6 +158,48 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(saved.status, "queued", "Should remain queued after failure")
         XCTAssertEqual(saved.attempts, 1, "Attempts should increment on failure")
         XCTAssertNotNil(saved.lastError, "Last error should be recorded")
+    }
+
+    func testOutboundSync_retriesFailedUnsavedLinks() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+
+        let url = URL(string: "https://blog.closetcorepatterns.com/pants-fitting")!
+        let link = LinkEntity(
+            originalUrl: url,
+            canonicalUrl: url,
+            sharedAt: Date(),
+            status: "failed",
+            attempts: 8,
+            lastError: "Previous network failure",
+            updatedAt: Date(),
+            createdAt: Date()
+        )
+        context.insert(link)
+        try context.save()
+
+        let api = MockAPI()
+        api.nextPostResult = .success(
+            PostLinkResponse(
+                serverId: "server-closet-core",
+                canonicalUrl: "https://blog.closetcorepatterns.com/pants-fitting"
+            )
+        )
+
+        let engine = SyncEngine(
+            api: api,
+            modelContainer: container
+        )
+
+        await engine._testRunSyncNow(reason: "test_retry_failed")
+
+        let saved = try XCTUnwrap(fetchAllLinks(context).first)
+        XCTAssertEqual(api.capturedPostPayloads.count, 1)
+        XCTAssertEqual(api.capturedPostPayloads.first?.url, url.absoluteString)
+        XCTAssertEqual(saved.status, "synced")
+        XCTAssertEqual(saved.serverId, "server-closet-core")
+        XCTAssertEqual(saved.attempts, 0)
+        XCTAssertNil(saved.lastError)
     }
 
     func testInboundSync_mergesServerLinks_andUpdatesCursor() async throws {
@@ -202,8 +229,7 @@ final class SyncEngineTests: XCTestCase {
 
         let engine = SyncEngine(
             api: api,
-            modelContainer: container,
-            accessTokenProvider: { "test-token" }
+            modelContainer: container
         )
 
         await engine._testRunSyncNow(reason: "test")
@@ -270,8 +296,7 @@ final class SyncEngineTests: XCTestCase {
 
         let engine = SyncEngine(
             api: api,
-            modelContainer: container,
-            accessTokenProvider: { "test-token" }
+            modelContainer: container
         )
         await engine._testRunSyncNow(reason: "test")
 

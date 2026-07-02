@@ -94,6 +94,21 @@ private struct InnerOptimizedInboxView: View {
                         viewModel.openOriginal(link)
                     }
                 )
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    Button {
+                        viewModel.archiveLink(link)
+                    } label: {
+                        Label("Archive", systemImage: "archivebox")
+                    }
+                    .tint(.blue)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        viewModel.deleteLink(link)
+                    } label: {
+                        Label("Delete", systemImage: Theme.Icons.delete)
+                    }
+                }
                 .listRowSeparator(.hidden)
                 .listRowInsets(
                     EdgeInsets(

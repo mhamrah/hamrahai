@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -20,6 +20,8 @@ pub struct Link {
     pub title: Option<String>,
     pub state: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +38,11 @@ pub struct CreateLinkRequest {
 pub struct ListLinksQuery {
     pub since: Option<String>,
     pub limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateLinkRequest {
+    pub status: String,
 }
 
 #[derive(Serialize)]
@@ -59,12 +66,24 @@ pub struct ServerLink {
     pub status: String,
     pub shared_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Serialize)]
 pub struct CreateLinkResponse {
     pub id: String,
     pub canonical_url: String,
+}
+
+#[derive(Serialize)]
+pub struct LinkMutationResponse {
+    pub success: bool,
+    pub link: ServerLink,
+}
+
+#[derive(Serialize)]
+pub struct DeleteLinkResponse {
+    pub success: bool,
 }
 
 pub async fn list_links(State(pool): State<DbPool>, headers: HeaderMap) -> impl IntoResponse {
@@ -97,10 +116,10 @@ pub async fn list_links_with_query(
 
     let rows = sqlx::query_as::<_, Link>(
         r#"
-        SELECT id, user_id, url, title, state, created_at
+        SELECT id, user_id, url, title, state, created_at, updated_at, deleted_at
         FROM links
-        WHERE user_id = $1 AND ($2::timestamptz IS NULL OR created_at > $2)
-        ORDER BY created_at ASC
+        WHERE user_id = $1 AND ($2::timestamptz IS NULL OR updated_at > $2)
+        ORDER BY updated_at ASC
         LIMIT $3
         "#,
     )
@@ -111,7 +130,7 @@ pub async fn list_links_with_query(
     .await
     .unwrap_or_default();
 
-    let next_cursor = rows.last().map(|link| link.created_at.to_rfc3339());
+    let next_cursor = rows.last().map(|link| link.updated_at.to_rfc3339());
     let links = rows.into_iter().map(ServerLink::from).collect();
 
     Json(LinkDeltaResponse { links, next_cursor }).into_response()
@@ -130,7 +149,7 @@ pub async fn create_link(
     let link = sqlx::query_as::<_, Link>(
         r#"INSERT INTO links (id, user_id, url, title, state)
            VALUES ($1, $2, $3, $4, 'new')
-           RETURNING id, user_id, url, title, state, created_at"#,
+           RETURNING id, user_id, url, title, state, created_at, updated_at, deleted_at"#,
     )
     .bind(id)
     .bind(claims.sub)
@@ -155,8 +174,113 @@ pub async fn create_link(
     }
 }
 
+pub async fn update_link(
+    State(pool): State<DbPool>,
+    headers: HeaderMap,
+    Path(link_id): Path<Uuid>,
+    Json(req): Json<UpdateLinkRequest>,
+) -> impl IntoResponse {
+    let claims = match require_claims(&headers) {
+        Ok(c) => c,
+        Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+    };
+
+    let state = match req.status.as_str() {
+        "archived" => "archived",
+        "synced" => "new",
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"success": false, "error": "Unsupported link status"})),
+            )
+                .into_response();
+        }
+    };
+
+    let link = sqlx::query_as::<_, Link>(
+        r#"
+        UPDATE links
+        SET state = $3, updated_at = NOW(), deleted_at = NULL
+        WHERE id = $1 AND user_id = $2
+        RETURNING id, user_id, url, title, state, created_at, updated_at, deleted_at
+        "#,
+    )
+    .bind(link_id)
+    .bind(claims.sub)
+    .bind(state)
+    .fetch_optional(&pool)
+    .await;
+
+    match link {
+        Ok(Some(link)) => Json(LinkMutationResponse {
+            success: true,
+            link: ServerLink::from(link),
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "error": "Link not found"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "Failed to update link");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": "Failed to update link"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+pub async fn delete_link(
+    State(pool): State<DbPool>,
+    headers: HeaderMap,
+    Path(link_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let claims = match require_claims(&headers) {
+        Ok(c) => c,
+        Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+    };
+
+    let result = sqlx::query_as::<_, Link>(
+        r#"
+        UPDATE links
+        SET state = 'deleted', deleted_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND user_id = $2
+        RETURNING id, user_id, url, title, state, created_at, updated_at, deleted_at
+        "#,
+    )
+    .bind(link_id)
+    .bind(claims.sub)
+    .fetch_optional(&pool)
+    .await;
+
+    match result {
+        Ok(Some(_link)) => Json(DeleteLinkResponse { success: true }).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "error": "Link not found"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "Failed to delete link");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": "Failed to delete link"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 impl From<Link> for ServerLink {
     fn from(link: Link) -> Self {
+        let status = match link.state.as_str() {
+            "archived" => "archived",
+            "deleted" => "deleted",
+            _ => "synced",
+        };
         ServerLink {
             id: link.id.to_string(),
             original_url: link.url.clone(),
@@ -168,9 +292,10 @@ impl From<Link> for ServerLink {
             lang: None,
             tags: Vec::new(),
             save_count: 1,
-            status: "synced".to_string(),
+            status: status.to_string(),
             shared_at: link.created_at,
             created_at: link.created_at,
+            updated_at: link.updated_at,
         }
     }
 }

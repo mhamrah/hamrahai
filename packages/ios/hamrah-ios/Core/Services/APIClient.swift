@@ -287,6 +287,23 @@ final class HamrahAPIClient {
         )
     }
 
+    func patch<Response: Decodable>(
+        _ endpoint: String,
+        body: Encodable? = nil,
+        auth: APIAuthRequirement = .required,
+        customBaseURL: String? = nil,
+        responseType: Response.Type = Response.self
+    ) async throws -> Response {
+        try await send(
+            .PATCH,
+            endpoint,
+            auth: auth,
+            body: body,
+            customBaseURL: customBaseURL,
+            responseType: responseType
+        )
+    }
+
     func delete<Response: Decodable>(
         _ endpoint: String,
         auth: APIAuthRequirement = .required,

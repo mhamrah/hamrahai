@@ -18,13 +18,14 @@ struct InboxView: View {
     @State private var sort: LinkSort = .recent
     @State private var showFailedOnly: Bool = false
     @State private var syncing: Bool = false
+    private let linkApi: LinkAPI = SecureAPILinkClient()
 
     // Query all links
     @Query var allLinks: [LinkEntity]
 
     // Computed property for dynamic filtering and sorting
     var links: [LinkEntity] {
-        var filtered = allLinks
+        var filtered = allLinks.filter { $0.status != "archived" && $0.status != "deleted" }
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let term = searchText
             filtered = filtered.filter {
@@ -72,6 +73,32 @@ struct InboxView: View {
                                 Label("Open Original", systemImage: "safari")
                             }
 
+                            Button {
+                                archiveLink(link)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+
+                            Button(role: .destructive) {
+                                deleteLink(link)
+                            } label: {
+                                Label("Delete", systemImage: Theme.Icons.delete)
+                            }
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button {
+                                archiveLink(link)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                            .tint(.blue)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                deleteLink(link)
+                            } label: {
+                                Label("Delete", systemImage: Theme.Icons.delete)
+                            }
                         }
                     }
                 }
@@ -101,6 +128,53 @@ struct InboxView: View {
 
     private func openOriginal(_ link: LinkEntity) {
         openURL(link.canonicalUrl)
+    }
+
+    private func archiveLink(_ link: LinkEntity) {
+        let localId = link.localId
+        let serverId = link.serverId
+
+        Task { @MainActor in
+            do {
+                if let serverId {
+                    _ = try await linkApi.updateLink(serverId: serverId, status: "archived")
+                }
+                guard let link = linkEntity(with: localId) else { return }
+                link.status = "archived"
+                link.updatedAt = Date()
+                try modelContext.save()
+            } catch {
+                assertionFailure("Failed to archive link: \(error)")
+            }
+        }
+    }
+
+    private func deleteLink(_ link: LinkEntity) {
+        let localId = link.localId
+        let serverId = link.serverId
+
+        Task { @MainActor in
+            do {
+                if let serverId {
+                    try await linkApi.deleteLink(serverId: serverId)
+                }
+                guard let link = linkEntity(with: localId) else { return }
+                modelContext.delete(link)
+                try modelContext.save()
+            } catch {
+                assertionFailure("Failed to delete link: \(error)")
+            }
+        }
+    }
+
+    private func linkEntity(with localId: UUID) -> LinkEntity? {
+        var descriptor = FetchDescriptor<LinkEntity>(
+            predicate: #Predicate { link in
+                link.localId == localId
+            }
+        )
+        descriptor.fetchLimit = 1
+        return try? modelContext.fetch(descriptor).first
     }
 
     private func runSync() async {

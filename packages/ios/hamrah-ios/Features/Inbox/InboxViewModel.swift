@@ -25,6 +25,7 @@ final class InboxViewModel: BaseViewModel {
     // MARK: - Dependencies
 
     private let syncEngine: SyncEngine
+    private let api: LinkAPI
     private let modelContext: ModelContext
 
     // MARK: - Computed Properties
@@ -54,8 +55,9 @@ final class InboxViewModel: BaseViewModel {
 
     // MARK: - Initialization
 
-    init(syncEngine: SyncEngine? = nil, modelContext: ModelContext) {
+    init(syncEngine: SyncEngine? = nil, api: LinkAPI? = nil, modelContext: ModelContext) {
         self.syncEngine = syncEngine ?? SyncEngine()
+        self.api = api ?? SecureAPILinkClient()
         self.modelContext = modelContext
         super.init()
         setupSearchDebouncing()
@@ -84,18 +86,50 @@ final class InboxViewModel: BaseViewModel {
     }
 
     func deleteLink(_ link: LinkEntity) {
-        modelContext.delete(link)
+        let localId = link.localId
+        let serverId = link.serverId
 
-        do {
-            try modelContext.save()
-        } catch {
-            handleError(error)
+        Task { @MainActor in
+            do {
+                if let serverId {
+                    try await api.deleteLink(serverId: serverId)
+                }
+                guard let link = self.link(withLocalId: localId) else { return }
+                modelContext.delete(link)
+                try modelContext.save()
+            } catch {
+                handleError(error)
+            }
         }
     }
 
     func deleteLink(localId: UUID) {
         guard let link = link(withLocalId: localId) else { return }
         deleteLink(link)
+    }
+
+    func archiveLink(_ link: LinkEntity) {
+        let localId = link.localId
+        let serverId = link.serverId
+
+        Task { @MainActor in
+            do {
+                if let serverId {
+                    _ = try await api.updateLink(serverId: serverId, status: "archived")
+                }
+                guard let link = self.link(withLocalId: localId) else { return }
+                link.status = "archived"
+                link.updatedAt = Date()
+                try modelContext.save()
+            } catch {
+                handleError(error)
+            }
+        }
+    }
+
+    func archiveLink(localId: UUID) {
+        guard let link = link(withLocalId: localId) else { return }
+        archiveLink(link)
     }
 
     func retrySync(for link: LinkEntity) {

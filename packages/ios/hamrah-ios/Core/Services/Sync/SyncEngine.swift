@@ -116,12 +116,12 @@ final class SyncEngine: ObservableObject {
         }
 
         let context = modelContainer.mainContext
-        queuedLinkCount = queuedLinks(context).count
+        queuedLinkCount = outboundRetryCandidates(context).count
         logger.info("Starting sync; reason=\(reason, privacy: .public)")
 
         await syncOutboundLinks(context: context)
         await syncInboundLinks(context: context)
-        queuedLinkCount = queuedLinks(context).count
+        queuedLinkCount = outboundRetryCandidates(context).count
         lastSyncAt = Date()
 
         logger.info("Finished sync; reason=\(reason, privacy: .public)")
@@ -129,9 +129,13 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Outbound
 
-    private func queuedLinks(_ context: ModelContext) -> [LinkEntity] {
+    private func outboundRetryCandidates(_ context: ModelContext) -> [LinkEntity] {
         (try? context.fetch(
-            FetchDescriptor<LinkEntity>(predicate: #Predicate { $0.status == "queued" })
+            FetchDescriptor<LinkEntity>(
+                predicate: #Predicate {
+                    $0.status == "queued" || ($0.status == "failed" && $0.serverId == nil)
+                }
+            )
         )) ?? []
     }
 
@@ -151,6 +155,7 @@ final class SyncEngine: ObservableObject {
             link.canonicalUrl = canonURL
         }
         link.status = "synced"
+        link.attempts = 0
         link.updatedAt = Date()
         link.lastError = nil
     }
@@ -158,7 +163,7 @@ final class SyncEngine: ObservableObject {
     private func markFailure(_ link: LinkEntity, error: Error) {
         link.attempts += 1
         link.lastError = error.localizedDescription
-        if link.attempts > 5 { link.status = "failed" }
+        link.status = link.attempts >= 5 ? "failed" : "queued"
         link.updatedAt = Date()
     }
 
@@ -169,8 +174,9 @@ final class SyncEngine: ObservableObject {
     private func syncOutboundLinks(context: ModelContext) async {
         let prefs = currentPrefs(context)
 
-        for link in queuedLinks(context) {
+        for link in outboundRetryCandidates(context) {
             do {
+                link.status = "syncing"
                 let resp = try await api.postLink(
                     payload: payload(for: link, prefs: prefs)
                 )
@@ -229,6 +235,13 @@ final class SyncEngine: ObservableObject {
             return
         }
 
+        if serverLink.status == "deleted" {
+            if let link = links.first {
+                context.delete(link)
+            }
+            return
+        }
+
         let link =
             links.first
             ?? LinkEntity(
@@ -250,7 +263,7 @@ final class SyncEngine: ObservableObject {
         link.lang = serverLink.lang
         link.saveCount = serverLink.saveCount
         link.status = serverLink.status
-        link.updatedAt = Date()
+        link.updatedAt = serverLink.updatedAt ?? Date()
         link.serverId = serverLink.serverId
 
         // Replace canonicalUrl if server canonicalized it
@@ -318,6 +331,8 @@ extension SyncCursor {
 protocol LinkAPI {
     func postLink(payload: OutboundLinkPayload) async throws -> PostLinkResponse
     func getLinks(since: String, limit: Int) async throws -> DeltaResponse
+    func updateLink(serverId: String, status: String) async throws -> ServerLink
+    func deleteLink(serverId: String) async throws
 }
 
 #if DEBUG
@@ -329,6 +344,26 @@ protocol LinkAPI {
         func getLinks(since: String, limit: Int) async throws -> DeltaResponse {
             DeltaResponse(links: [], nextCursor: nil)
         }
+
+        func updateLink(serverId: String, status: String) async throws -> ServerLink {
+            ServerLink(
+                serverId: serverId,
+                originalUrl: "https://example.com",
+                canonicalUrl: "https://example.com",
+                title: nil,
+                snippet: nil,
+                summaryShort: nil,
+                summaryLong: nil,
+                lang: nil,
+                tags: [],
+                saveCount: 1,
+                status: status,
+                sharedAt: Date(),
+                createdAt: Date()
+            )
+        }
+
+        func deleteLink(serverId: String) async throws {}
     }
 #endif
 
@@ -372,6 +407,19 @@ struct DeltaResponse: Codable {
     }
 }
 
+struct UpdateLinkRequest: Encodable {
+    let status: String
+}
+
+struct LinkMutationResponse: Decodable {
+    let success: Bool
+    let link: ServerLink
+}
+
+struct DeleteLinkResponse: Decodable {
+    let success: Bool
+}
+
 struct ServerLink: Codable {
     let serverId: String?
     let originalUrl: String
@@ -386,6 +434,7 @@ struct ServerLink: Codable {
     let status: String
     let sharedAt: Date
     let createdAt: Date
+    let updatedAt: Date? = nil
 
     enum CodingKeys: String, CodingKey {
         case serverId = "id"
@@ -401,6 +450,7 @@ struct ServerLink: Codable {
         case status
         case sharedAt = "shared_at"
         case createdAt = "created_at"
+        case updatedAt = "updated_at"
     }
 }
 
@@ -432,6 +482,24 @@ final class SecureAPILinkClient: LinkAPI {
             endpoint,
             auth: .required,
             responseType: DeltaResponse.self
+        )
+    }
+
+    func updateLink(serverId: String, status: String) async throws -> ServerLink {
+        let response = try await HamrahAPIClient.shared.patch(
+            "/v1/links/\(serverId)",
+            body: UpdateLinkRequest(status: status),
+            auth: .required,
+            responseType: LinkMutationResponse.self
+        )
+        return response.link
+    }
+
+    func deleteLink(serverId: String) async throws {
+        _ = try await HamrahAPIClient.shared.delete(
+            "/v1/links/\(serverId)",
+            auth: .required,
+            responseType: DeleteLinkResponse.self
         )
     }
 }

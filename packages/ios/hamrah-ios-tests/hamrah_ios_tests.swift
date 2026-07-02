@@ -38,6 +38,26 @@ struct hamrah_ios_tests {
             getCallCount += 1
             return try nextDeltaResult.get()
         }
+
+        func updateLink(serverId: String, status: String) async throws -> ServerLink {
+            ServerLink(
+                serverId: serverId,
+                originalUrl: "https://example.com",
+                canonicalUrl: "https://example.com",
+                title: nil,
+                snippet: nil,
+                summaryShort: nil,
+                summaryLong: nil,
+                lang: nil,
+                tags: [],
+                saveCount: 1,
+                status: status,
+                sharedAt: Date(),
+                createdAt: Date()
+            )
+        }
+
+        func deleteLink(serverId: String) async throws {}
     }
 
     enum SyncTestError: Error {

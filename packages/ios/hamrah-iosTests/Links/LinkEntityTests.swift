@@ -1,3 +1,4 @@
+import SwiftData
 import XCTest
 
 @testable import hamrah_ios
@@ -62,5 +63,27 @@ final class LinkEntityTests: XCTestCase {
         XCTAssertEqual(link.saveCount, 1)
         XCTAssertNotNil(link.createdAt)
         XCTAssertNotNil(link.updatedAt)
+    }
+
+    func testRecentDescriptorExcludesArchivedLinks() throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: LinkEntity.self, TagEntity.self, SyncCursor.self, UserPrefs.self,
+            configurations: config
+        )
+        let context = ModelContext(container)
+
+        let visible = makeLink(original: "https://example.com/visible")
+        visible.status = "synced"
+        let archived = makeLink(original: "https://example.com/archived")
+        archived.status = "archived"
+
+        context.insert(visible)
+        context.insert(archived)
+        try context.save()
+
+        let links = try context.fetch(LinkQueryDescriptors.recent())
+
+        XCTAssertEqual(links.map(\.canonicalUrl.absoluteString), ["https://example.com/visible"])
     }
 }
