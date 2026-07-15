@@ -2,6 +2,7 @@ import { component$ } from "@builder.io/qwik";
 import type { DocumentHead } from "@builder.io/qwik-city";
 import { useUserLoader } from "../layout";
 import { PasskeyManagement } from "~/components/auth/passkey-management";
+import { MusicSyncPanel } from "~/components/music/music-sync-panel";
 
 export default component$(() => {
   const user = useUserLoader();
@@ -177,6 +178,7 @@ export default component$(() => {
                 userEmail={user.value.email}
               />
             </div>
+            <MusicSyncPanel />
           </section>
         </div>
       </main>

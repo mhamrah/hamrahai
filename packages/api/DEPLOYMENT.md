@@ -63,6 +63,25 @@ gcloud artifacts repositories create hamrah \
 
 ## GitHub Actions Setup
 
+## Music Sync Configuration
+
+Configure these as runtime secrets for the API service; never expose them to web
+or native clients.
+
+| Secret | Purpose |
+| --- | --- |
+| `SPOTIFY_CLIENT_ID` | Spotify developer application client ID |
+| `SPOTIFY_CLIENT_SECRET` | Spotify developer application client secret |
+| `SPOTIFY_REDIRECT_URI` | `https://api.hamrah.app/v1/music/connections/spotify/callback` |
+| `TIDAL_CLIENT_ID` | TIDAL developer application client ID |
+| `TIDAL_REDIRECT_URI` | `https://api.hamrah.app/v1/music/connections/tidal/callback` |
+| `MUSIC_TOKEN_ENCRYPTION_KEY` | Randomly generated 32-byte key, base64url encoded, used only to encrypt provider tokens at rest |
+| `WEB_APP_URL` | `https://hamrah.app` post-OAuth redirect destination |
+
+Register both callback URLs exactly with their respective providers. Spotify
+development mode users must be allowlisted. Run the first live TIDAL import
+against a test account after enabling its playlist and collection write scopes.
+
 ### Required Repository Variables
 
 Configure the following GitHub Actions repository variables:
