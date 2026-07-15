@@ -61,26 +61,26 @@ gcloud artifacts repositories create hamrah \
   --project=hamrah-ai
 ```
 
-## GitHub Actions Setup
-
 ## Music Sync Configuration
 
-Configure these as runtime secrets for the API service; never expose them to web
-or native clients.
+The API is the only component that communicates with music providers. Do not
+expose provider configuration to the web or native clients.
 
-| Secret | Purpose |
+| Runtime setting | Purpose |
 | --- | --- |
-| `SPOTIFY_CLIENT_ID` | Spotify developer application client ID |
-| `SPOTIFY_CLIENT_SECRET` | Spotify developer application client secret |
-| `SPOTIFY_REDIRECT_URI` | `https://api.hamrah.app/v1/music/connections/spotify/callback` |
-| `TIDAL_CLIENT_ID` | TIDAL developer application client ID |
-| `TIDAL_REDIRECT_URI` | `https://api.hamrah.app/v1/music/connections/tidal/callback` |
-| `MUSIC_TOKEN_ENCRYPTION_KEY` | Randomly generated 32-byte key, base64url encoded, used only to encrypt provider tokens at rest |
-| `WEB_APP_URL` | `https://hamrah.app` post-OAuth redirect destination |
+| `SPOTIFY_CLIENT_ID` | GitHub Actions repository variable; Spotify developer application client ID |
+| `SPOTIFY_CLIENT_SECRET` | Secret Manager secret; Spotify developer application client secret |
+| `SPOTIFY_REDIRECT_URI` | Deployment workflow value: `https://api.hamrah.app/v1/music/connections/spotify/callback` |
+| `TIDAL_CLIENT_ID` | GitHub Actions repository variable; TIDAL developer application client ID |
+| `TIDAL_REDIRECT_URI` | Deployment workflow value: `https://api.hamrah.app/v1/music/connections/tidal/callback` |
+| `MUSIC_TOKEN_ENCRYPTION_KEY` | Secret Manager secret; a 32-byte base64url key used only to encrypt provider tokens at rest |
+| `WEB_APP_URL` | Deployment workflow value: `https://hamrah.app` post-OAuth redirect destination |
 
 Register both callback URLs exactly with their respective providers. Spotify
 development mode users must be allowlisted. Run the first live TIDAL import
 against a test account after enabling its playlist and collection write scopes.
+
+## GitHub Actions Setup
 
 ### Required Repository Variables
 
@@ -97,6 +97,8 @@ Configure the following GitHub Actions repository variables:
 | `GAR_REGISTRY` | `us-central1-docker.pkg.dev` |
 | `WIF_PROVIDER` | `projects/66020219411/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
 | `APPLE_TEAM_ID` | Apple Developer Team ID used to verify App Attest app IDs |
+| `SPOTIFY_CLIENT_ID` | Spotify developer application client ID |
+| `TIDAL_CLIENT_ID` | TIDAL developer application client ID |
 | `NEON_PROJECT_ID` | Neon project ID used for API CI/release validation branches |
 | `NEON_PARENT_BRANCH` | Sanitized Neon branch used as the parent for short-lived CI branches |
 
