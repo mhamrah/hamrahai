@@ -329,6 +329,59 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
 }
 
 #[tokio::test]
+async fn http_music_import_create_records_the_required_provider_pair() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-create-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Create Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    let csrf_token = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &raw_session, 6).await?;
+    for provider in ["spotify", "tidal"] {
+        sqlx::query("INSERT INTO music_connections (id,user_id,provider,status) VALUES ($1,$2,$3,'connected')")
+            .bind(Uuid::new_v4())
+            .bind(user.id)
+            .bind(provider)
+            .execute(&pool)
+            .await?;
+    }
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/music/imports")
+        .header("content-type", "application/json")
+        .header(
+            "cookie",
+            format!("session={raw_session}; csrf_token={csrf_token}"),
+        )
+        .header("x-csrf-token", csrf_token)
+        .body(Body::from(
+            json!({
+                "include_owned_playlists": true,
+                "include_saved_playlists": false,
+                "include_followed_artists": true,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let (source_provider, target_provider): (String, String) = sqlx::query_as(
+        "SELECT source_provider, target_provider FROM music_import_runs WHERE user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(source_provider, "spotify");
+    assert_eq!(target_provider, "tidal");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_music_import_list_marks_stalled_run_restartable() -> anyhow::Result<()> {
     let Some((pool, router)) = setup_router().await? else {
         return Ok(());
