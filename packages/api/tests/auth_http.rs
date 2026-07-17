@@ -323,7 +323,9 @@ async fn http_webauthn_register_begin_accepts_a_valid_web_session() -> anyhow::R
             .as_str()
             .is_some_and(|challenge_id| !challenge_id.is_empty())
     );
-    assert_eq!(response["options"]["user"]["name"], user_email);
+    // webauthn-rs serializes browser creation options under `publicKey`, and
+    // the web client intentionally accepts this standards-compliant shape.
+    assert_eq!(response["options"]["publicKey"]["user"]["name"], user_email);
 
     Ok(())
 }

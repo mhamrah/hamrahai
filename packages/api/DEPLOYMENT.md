@@ -85,8 +85,12 @@ end-to-end import contract and manual integration check.
 
 ## Authentication Runtime Configuration
 
-The deployment workflow pins the production WebAuthn relying party and OAuth
-audiences. Do not let these fall back to localhost values in Cloud Run.
+The deployment workflow renders
+`packages/api/deploy/cloud-run.runtime.yaml.tmpl` into a temporary Cloud Run YAML
+environment file. Keep non-secret production configuration in that template;
+GitHub repository variables are substituted only at deploy time, and secrets
+remain in Secret Manager. Do not let the WebAuthn values fall back to localhost
+in Cloud Run.
 
 | Runtime setting | Production value |
 | --- | --- |
