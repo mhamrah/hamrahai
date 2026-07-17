@@ -3,6 +3,7 @@ WORKDIR /app
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
+COPY src src
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
