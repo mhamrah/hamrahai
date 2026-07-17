@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { startAuthentication } from "@simplewebauthn/browser";
+import {
+  startAuthentication,
+  startRegistration,
+} from "@simplewebauthn/browser";
 import {
   WebAuthnClient,
   authenticateWithDiscoverablePasskey,
@@ -97,7 +100,60 @@ describe("WebAuthnClient", () => {
     });
   });
 
-  // Removed deprecated registerPasskey test suite (email / registration flow no longer supported)
+  describe("addPasskey", () => {
+    it("starts and verifies registration with the authenticated user's details", async () => {
+      mockApiClient.post
+        .mockResolvedValueOnce({
+          success: true,
+          challenge_id: "challenge-123",
+          options: {
+            challenge: "ZmFrZS1jaGFsbGVuZ2U",
+            rp: { id: "hamrah.app", name: "Hamrah App" },
+            user: {
+              id: "dXNlci0xMjM",
+              name: "passkey@example.com",
+              displayName: "Passkey User",
+            },
+            pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+          },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          credential_id: "credential-123",
+        });
+      vi.mocked(startRegistration).mockResolvedValueOnce({
+        id: "credential-123",
+      } as any);
+
+      const result = await webauthnClient.addPasskey({
+        id: "user-123",
+        email: "passkey@example.com",
+        name: "Passkey User",
+      });
+
+      expect(result).toEqual({
+        success: true,
+        credential_id: "credential-123",
+      });
+      expect(mockApiClient.post).toHaveBeenNthCalledWith(
+        1,
+        "/api/webauthn/register/begin",
+        {
+          user_id: "user-123",
+          email: "passkey@example.com",
+          display_name: "Passkey User",
+        },
+      );
+      expect(mockApiClient.post).toHaveBeenNthCalledWith(
+        2,
+        "/api/webauthn/register/verify",
+        {
+          challenge_id: "challenge-123",
+          response: { id: "credential-123" },
+        },
+      );
+    });
+  });
 
   // Removed deprecated authenticateWithPasskey test suite (email-scoped authentication no longer supported)
 

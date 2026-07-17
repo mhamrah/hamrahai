@@ -703,6 +703,31 @@ pub fn require_claims(headers: &HeaderMap) -> anyhow::Result<Claims> {
     Ok(data.claims)
 }
 
+/// Resolves an authenticated API caller from either a native bearer token or the
+/// shared web session cookie. Cookie-authenticated unsafe requests remain
+/// protected by `csrf_cookie_guard`.
+pub async fn require_session_or_claims(
+    pool: &DbPool,
+    headers: &HeaderMap,
+) -> anyhow::Result<Claims> {
+    if let Ok(claims) = require_claims(headers) {
+        return Ok(claims);
+    }
+
+    let session_token = read_cookie(headers, SESSION_COOKIE)
+        .ok_or_else(|| anyhow::anyhow!("missing bearer token or session cookie"))?;
+    let (session, user) = get_user_by_session_token(pool, &session_token)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invalid session"))?;
+
+    Ok(Claims {
+        sub: user.id,
+        email: user.email,
+        iat: session.created_at.timestamp().max(0) as usize,
+        exp: session.expires_at.timestamp().max(0) as usize,
+    })
+}
+
 pub async fn csrf_cookie_guard(req: Request, next: Next) -> Response {
     if requires_csrf_check(&req)
         && let Err(status) = validate_unsafe_cookie_request(req.headers())

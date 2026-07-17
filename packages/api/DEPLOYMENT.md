@@ -83,6 +83,23 @@ against a test account after enabling `playlists.write`, `collection.write`,
 the new scopes are deployed. See [MUSIC_IMPORT.md](MUSIC_IMPORT.md) for the
 end-to-end import contract and manual integration check.
 
+## Authentication Runtime Configuration
+
+The deployment workflow pins the production WebAuthn relying party and OAuth
+audiences. Do not let these fall back to localhost values in Cloud Run.
+
+| Runtime setting | Production value |
+| --- | --- |
+| `WEBAUTHN_RP_ID` | `hamrah.app` |
+| `WEBAUTHN_RP_ORIGIN` | `https://hamrah.app` |
+| `GOOGLE_ALLOWED_CLIENT_IDS` | The comma-separated web and iOS Google OAuth client IDs |
+| `APPLE_ALLOWED_CLIENT_IDS` | `app.hamrah.ios,app.hamrah.web` |
+| `CORS_ALLOWED_ORIGINS` | `https://hamrah.app,https://www.hamrah.app` |
+
+The Google audience allowlist must include the exact client ID in
+`packages/web/wrangler.toml` and the iOS `GIDClientID`; otherwise Google
+sign-in reaches the callback but is rejected by the API.
+
 ## GitHub Actions Setup
 
 ### Required Repository Variables

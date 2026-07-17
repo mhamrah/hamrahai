@@ -9,6 +9,7 @@
 // HAMRAH_API_BASE=http://localhost:8080 \
 // TEST_USER_ID=<uuid> \
 // TEST_USER_EMAIL=webauthn-test@example.com \
+// TEST_ACCESS_TOKEN=<authenticated bearer token> \
 // cargo test -p hamrah-server --test webauthn_basic -- --ignored
 //
 // Notes:
@@ -35,6 +36,8 @@ async fn webauthn_register_begin_skeleton() -> Result<()> {
 
     let email = std::env::var("TEST_USER_EMAIL")
         .unwrap_or_else(|_| "webauthn-test@example.com".to_string());
+    let access_token = std::env::var("TEST_ACCESS_TOKEN")
+        .expect("TEST_ACCESS_TOKEN is required for authenticated passkey registration");
 
     // Request body mirrors the expected wire contract (snake_case)
     // See packages/shared/src/dto.ts RegisterBeginRequest (label/flow_id removed)
@@ -59,6 +62,7 @@ async fn webauthn_register_begin_skeleton() -> Result<()> {
         .post(&url)
         .header("Origin", origin)
         .header("Content-Type", "application/json")
+        .bearer_auth(access_token)
         .json(&body)
         .send()
         .await?;

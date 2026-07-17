@@ -38,6 +38,8 @@ jobs:
       - name: Validate release configuration
         run: |
           test -n "${{ vars.APPLE_TEAM_ID }}"
+          test -n "${{ vars.SPOTIFY_CLIENT_ID }}"
+          test -n "${{ vars.TIDAL_CLIENT_ID }}"
           test -n "${{ vars.NEON_PROJECT_ID }}"
           test -n "${{ vars.NEON_PARENT_BRANCH }}"
           test -n "${{ secrets.NEON_API_KEY }}"
@@ -114,7 +116,7 @@ jobs:
             --cpu-throttling \
             --startup-probe httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=3,failureThreshold=18 \
             --liveness-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=3,failureThreshold=3 \
-            --set-env-vars "RUST_LOG=info,APPLE_TEAM_ID=${{ vars.APPLE_TEAM_ID }},SPOTIFY_CLIENT_ID=${{ vars.SPOTIFY_CLIENT_ID }},SPOTIFY_REDIRECT_URI=https://api.hamrah.app/v1/music/connections/spotify/callback,TIDAL_CLIENT_ID=${{ vars.TIDAL_CLIENT_ID }},TIDAL_REDIRECT_URI=https://api.hamrah.app/v1/music/connections/tidal/callback,WEB_APP_URL=https://hamrah.app" \
+            --set-env-vars "^|^RUST_LOG=info|APPLE_TEAM_ID=${{ vars.APPLE_TEAM_ID }}|WEBAUTHN_RP_ID=hamrah.app|WEBAUTHN_RP_ORIGIN=https://hamrah.app|GOOGLE_ALLOWED_CLIENT_IDS=66020219411-miac7ii9vtl18sugh830e58b4unai379.apps.googleusercontent.com,66020219411-bs8v3cvpah62q616uopgk0iasebnh4jh.apps.googleusercontent.com|APPLE_ALLOWED_CLIENT_IDS=app.hamrah.ios,app.hamrah.web|CORS_ALLOWED_ORIGINS=https://hamrah.app,https://www.hamrah.app|SPOTIFY_CLIENT_ID=${{ vars.SPOTIFY_CLIENT_ID }}|SPOTIFY_REDIRECT_URI=https://api.hamrah.app/v1/music/connections/spotify/callback|TIDAL_CLIENT_ID=${{ vars.TIDAL_CLIENT_ID }}|TIDAL_REDIRECT_URI=https://api.hamrah.app/v1/music/connections/tidal/callback|WEB_APP_URL=https://hamrah.app" \
             --set-secrets "DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,SPOTIFY_CLIENT_SECRET=SPOTIFY_CLIENT_SECRET:latest,MUSIC_TOKEN_ENCRYPTION_KEY=MUSIC_TOKEN_ENCRYPTION_KEY:latest"
 
       - name: Delete Neon release validation branch
