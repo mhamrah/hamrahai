@@ -659,14 +659,20 @@ async fn run_import(
         Ok((outcome, progress)) => ("partial", outcome, progress, None),
         Err(failure) => {
             tracing::warn!(error = %failure.message, %import_id, "music import failed");
+            let import_error = if failure
+                .message
+                .starts_with("TIDAL is temporarily rate limiting")
+            {
+                failure.message
+            } else {
+                "could not complete music import; reconnect both providers and try again"
+                    .to_string()
+            };
             (
                 "failed",
                 failure.outcome,
                 failure.progress,
-                Some(
-                    "could not complete music import; reconnect both providers and try again"
-                        .to_string(),
-                ),
+                Some(import_error),
             )
         }
     };
