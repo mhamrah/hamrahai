@@ -1,0 +1,87 @@
+# The complete Cloud Run service definition. Cloud Deploy renders this manifest
+# for each release, replacing the `hamrah-api` image placeholder with the
+# immutable image digest supplied by GitHub Actions.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: hamrah-api
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/invoker-iam-disabled: "true"
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "1"
+        run.googleapis.com/cpu-throttling: "true"
+    spec:
+      containers:
+        - image: hamrah-api
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 18
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: APPLE_TEAM_ID
+              value: "" # from-param: ${apple_team_id}
+            - name: WEBAUTHN_RP_ID
+              value: hamrah.app
+            - name: WEBAUTHN_RP_ORIGIN
+              value: https://hamrah.app
+            - name: GOOGLE_ALLOWED_CLIENT_IDS
+              value: 66020219411-miac7ii9vtl18sugh830e58b4unai379.apps.googleusercontent.com,66020219411-bs8v3cvpah62q616uopgk0iasebnh4jh.apps.googleusercontent.com
+            - name: APPLE_ALLOWED_CLIENT_IDS
+              value: app.hamrah.ios,app.hamrah.web
+            - name: CORS_ALLOWED_ORIGINS
+              value: https://hamrah.app,https://www.hamrah.app
+            - name: SPOTIFY_CLIENT_ID
+              value: "" # from-param: ${spotify_client_id}
+            - name: SPOTIFY_REDIRECT_URI
+              value: https://api.hamrah.app/v1/music/connections/spotify/callback
+            - name: TIDAL_CLIENT_ID
+              value: "" # from-param: ${tidal_client_id}
+            - name: TIDAL_REDIRECT_URI
+              value: https://api.hamrah.app/v1/music/connections/tidal/callback
+            - name: WEB_APP_URL
+              value: https://hamrah.app
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: DATABASE_URL
+                  key: latest
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: JWT_SECRET
+                  key: latest
+            - name: SPOTIFY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: SPOTIFY_CLIENT_SECRET
+                  key: latest
+            - name: MUSIC_TOKEN_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: MUSIC_TOKEN_ENCRYPTION_KEY
+                  key: latest

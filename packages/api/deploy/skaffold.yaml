@@ -1,0 +1,9 @@
+apiVersion: skaffold/v4beta7
+kind: Config
+metadata:
+  name: hamrah-api
+manifests:
+  rawYaml:
+    - cloud-run-service.yaml
+deploy:
+  cloudrun: {}

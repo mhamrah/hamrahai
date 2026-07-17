@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/api/**'
-      - '.github/workflows/api-deploy.yml'
+      - "packages/api/**"
+      - ".github/workflows/api-deploy.yml"
   workflow_dispatch:
 
 env:
@@ -101,32 +101,28 @@ jobs:
           IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE" --format='value(image_summary.digest)')"
+          test -n "$IMAGE_DIGEST"
+          IMAGE_REPOSITORY="${IMAGE%:*}"
+          echo "IMAGE_DIGEST=${IMAGE_REPOSITORY}@${IMAGE_DIGEST}" >> "$GITHUB_ENV"
 
-      - name: Render Cloud Run environment configuration
+      - name: Apply Cloud Deploy pipeline configuration
         run: |
-          envsubst < packages/api/deploy/cloud-run.runtime.yaml.tmpl > "$RUNNER_TEMP/cloud-run.env.yaml"
-          test -s "$RUNNER_TEMP/cloud-run.env.yaml"
-          ! grep -q '\${' "$RUNNER_TEMP/cloud-run.env.yaml"
+          gcloud deploy apply \
+            --file packages/api/deploy/clouddeploy.yaml \
+            --project "$PROJECT_ID" \
+            --region "$REGION"
 
-      - name: Deploy to Cloud Run
+      - name: Create Cloud Deploy release
         run: |
-          gcloud run deploy ${{ env.SERVICE }} \
-            --project ${{ env.PROJECT_ID }} \
-            --region ${{ env.REGION }} \
-            --image ${{ env.IMAGE }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --min-instances 0 \
-            --max-instances 1 \
-            --memory 512Mi \
-            --cpu 1 \
-            --port 8080 \
-            --cpu-throttling \
-            --startup-probe httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=3,failureThreshold=18 \
-            --liveness-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=3,failureThreshold=3 \
-            --env-vars-file "$RUNNER_TEMP/cloud-run.env.yaml" \
-            --set-secrets "DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,SPOTIFY_CLIENT_SECRET=SPOTIFY_CLIENT_SECRET:latest,MUSIC_TOKEN_ENCRYPTION_KEY=MUSIC_TOKEN_ENCRYPTION_KEY:latest"
+          RELEASE="api-${GITHUB_SHA:0:12}-${GITHUB_RUN_ATTEMPT}"
+          gcloud deploy releases create "$RELEASE" \
+            --delivery-pipeline hamrah-api \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --source packages/api/deploy \
+            --images "hamrah-api=$IMAGE_DIGEST" \
+            --deploy-parameters "apple_team_id=$APPLE_TEAM_ID,spotify_client_id=$SPOTIFY_CLIENT_ID,tidal_client_id=$TIDAL_CLIENT_ID"
 
       - name: Delete Neon release validation branch
         if: always() && steps.neon.outputs.branch_id != ''
