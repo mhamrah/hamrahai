@@ -108,10 +108,15 @@ localhost in Cloud Run.
 | `WEBAUTHN_RP_ORIGIN`        | `https://hamrah.app`                                    |
 | `GOOGLE_ALLOWED_CLIENT_IDS` | The comma-separated web and iOS Google OAuth client IDs |
 | `APPLE_ALLOWED_CLIENT_IDS`  | `app.hamrah.ios,app.hamrah.web`                         |
-| `CORS_ALLOWED_ORIGINS`      | `https://hamrah.app,https://www.hamrah.app`             |
+| `CORS_ALLOWED_ORIGINS`      | `https://hamrah.app`                                    |
 
 The Google audience allowlist must include the exact client ID in
 `packages/web/wrangler.toml` and the iOS `GIDClientID`.
+
+`hamrah.app` is the canonical web origin. If `www.hamrah.app` is added in
+Cloudflare, configure it as a DNS/redirect rule to the apex—do not serve the
+application from it, because the production WebAuthn origin is
+`https://hamrah.app`.
 
 ## Artifact Registry
 
