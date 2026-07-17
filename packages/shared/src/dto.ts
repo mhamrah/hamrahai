@@ -188,6 +188,34 @@ export interface NativeAuthResponse {
   error?: string;
 }
 
+/* ------------------------------- Music sync -------------------------------- */
+
+export type MusicProvider = "spotify" | "tidal";
+
+export interface MusicConnectionWire {
+  provider: MusicProvider;
+  provider_account_id?: string | null;
+  status: "pending" | "connected" | "error";
+  connected_at?: string | null;
+  last_error?: string | null;
+}
+
+export interface MusicImportRequestWire {
+  include_owned_playlists: boolean;
+  include_saved_playlists: boolean;
+  include_followed_artists: boolean;
+}
+
+export interface MusicImportWire {
+  id: string;
+  status: "queued" | "running" | "completed" | "partial" | "failed";
+  total_items: number;
+  imported_items: number;
+  unmatched_items: number;
+  error?: string | null;
+  created_at: string;
+}
+
 /* --------------------------------- Utilities -------------------------------- */
 
 /**

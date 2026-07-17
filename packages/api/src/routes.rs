@@ -3,6 +3,7 @@ use crate::auth;
 use crate::db::DbPool;
 use crate::links;
 use crate::models;
+use crate::music;
 use crate::preferences;
 use crate::summaries;
 use crate::tags;
@@ -208,6 +209,53 @@ async fn update_user_prefs_wrapper(
     preferences::update_user_prefs(axum::extract::State(pool), headers, json).await
 }
 
+async fn list_music_connections_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    music::list_connections(axum::extract::State(pool), headers).await
+}
+
+async fn begin_music_connection_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    path: axum::extract::Path<String>,
+    json: axum::Json<music::BeginConnectionRequest>,
+) -> Response {
+    music::begin_connection(axum::extract::State(pool), headers, path, json).await
+}
+
+async fn music_connection_callback_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    path: axum::extract::Path<String>,
+    query: axum::extract::Query<music::MusicOAuthCallbackQuery>,
+) -> Response {
+    music::complete_connection(axum::extract::State(pool), path, query).await
+}
+
+async fn disconnect_music_connection_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    path: axum::extract::Path<String>,
+) -> Response {
+    music::disconnect_connection(axum::extract::State(pool), headers, path).await
+}
+
+async fn create_music_import_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    json: axum::Json<music::CreateImportRequest>,
+) -> Response {
+    music::create_import(axum::extract::State(pool), headers, json).await
+}
+
+async fn list_music_imports_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    music::list_imports(axum::extract::State(pool), headers).await
+}
+
 pub fn create_router(pool: DbPool) -> Router {
     // Initialize WebAuthn config
     let rp_id = std::env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".to_string());
@@ -305,6 +353,23 @@ pub fn create_router(pool: DbPool) -> Router {
             get(get_user_prefs_wrapper).put(update_user_prefs_wrapper),
         )
         .route("/v1/models", get(models::list_models))
+        .route("/v1/music/connections", get(list_music_connections_wrapper))
+        .route(
+            "/v1/music/connections/{provider}/authorize",
+            post(begin_music_connection_wrapper),
+        )
+        .route(
+            "/v1/music/connections/{provider}/callback",
+            get(music_connection_callback_wrapper),
+        )
+        .route(
+            "/v1/music/connections/{provider}",
+            delete(disconnect_music_connection_wrapper),
+        )
+        .route(
+            "/v1/music/imports",
+            get(list_music_imports_wrapper).post(create_music_import_wrapper),
+        )
         .route("/v1/tags", get(list_tags_wrapper))
         .route(
             "/v1/links/{id}/summary",

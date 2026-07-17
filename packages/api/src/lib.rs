@@ -25,6 +25,7 @@ pub mod auth;
 pub mod db;
 pub mod links;
 pub mod models;
+pub mod music;
 pub mod preferences;
 pub mod routes;
 pub mod summaries;

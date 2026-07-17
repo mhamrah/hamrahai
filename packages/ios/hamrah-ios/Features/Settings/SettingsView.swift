@@ -14,10 +14,12 @@ struct SettingsView: View {
     @EnvironmentObject var authManager: NativeAuthManager
     @EnvironmentObject var biometricManager: BiometricAuthManager
     @EnvironmentObject var syncEngine: SyncEngine
+    @Environment(\.openURL) private var openURL
 
     private let userPrefsAPI = UserPrefsAPI()
     private let modelCatalogAPI = ModelCatalogAPI()
     private let passkeyAPI = PasskeyAPI()
+    private let musicSyncAPI = MusicSyncAPI()
 
     // Backing store (SwiftData) for a single UserPrefs instance
     @Query private var prefsQuery: [UserPrefs]
@@ -44,6 +46,10 @@ struct SettingsView: View {
     @State private var isFetchingModels = false
 
     @State private var passkeys: [PasskeyCredential] = []
+    @State private var musicConnections: [MusicConnectionDTO] = []
+    @State private var isLoadingMusic = false
+    @State private var includeSavedMusicPlaylists = false
+    @State private var latestMusicImport: MusicImportDTO?
 
     private var availableModelIds: [String] {
         availableModels.filter(\.isAvailable).map(\.id)
@@ -60,6 +66,7 @@ struct SettingsView: View {
             passkeysSection
             biometricSection
             serverSyncSection
+            musicSyncSection
             modelsSection
             syncEngineSection
             advancedSection
@@ -70,6 +77,7 @@ struct SettingsView: View {
             await fetchModelCatalog()
             await loadFromServerIfEmpty()
             loadPasskeys(showAlertOnFailure: false)
+            await loadMusicConnections()
         }
         .alert(
             "Error", isPresented: .constant(errorMessage != nil),
@@ -343,6 +351,66 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private var musicSyncSection: some View {
+        Section("Music Import") {
+            Text("Import Spotify playlists and followed artists into private TIDAL playlists.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            ForEach(["spotify", "tidal"], id: \.self) { provider in
+                HStack {
+                    Label(provider.capitalized, systemImage: provider == "spotify" ? "music.note" : "waveform")
+                    Spacer()
+                    if musicConnections.contains(where: { $0.provider == provider && $0.status == "connected" }) {
+                        Text("Connected").foregroundStyle(.green)
+                    } else {
+                        Button("Connect") { Task { await connectMusic(provider: provider) } }
+                            .disabled(isLoadingMusic || !canAttemptServerSync)
+                    }
+                }
+            }
+
+            Toggle("Also import saved Spotify playlists", isOn: $includeSavedMusicPlaylists)
+            Button("Start Import") { Task { await startMusicImport() } }
+                .disabled(isLoadingMusic || !hasMusicConnections || !canAttemptServerSync)
+
+            if let latestMusicImport {
+                Text("Latest import: \(latestMusicImport.status) · \(latestMusicImport.imported_items) imported · \(latestMusicImport.unmatched_items) unmatched")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var hasMusicConnections: Bool {
+        ["spotify", "tidal"].allSatisfy { provider in
+            musicConnections.contains { $0.provider == provider && $0.status == "connected" }
+        }
+    }
+
+    private func loadMusicConnections() async {
+        guard canAttemptServerSync else { return }
+        isLoadingMusic = true
+        defer { isLoadingMusic = false }
+        do { musicConnections = try await musicSyncAPI.connections() }
+        catch { errorMessage = "Failed to load music connections: \(error.localizedDescription)" }
+    }
+
+    private func connectMusic(provider: String) async {
+        isLoadingMusic = true
+        defer { isLoadingMusic = false }
+        do { openURL(try await musicSyncAPI.beginConnection(provider: provider)) }
+        catch { errorMessage = "Failed to connect \(provider.capitalized): \(error.localizedDescription)" }
+    }
+
+    private func startMusicImport() async {
+        isLoadingMusic = true
+        defer { isLoadingMusic = false }
+        do { latestMusicImport = try await musicSyncAPI.startImport(includeSavedPlaylists: includeSavedMusicPlaylists) }
+        catch { errorMessage = "Failed to start music import: \(error.localizedDescription)" }
     }
 
     @ViewBuilder

@@ -1,10 +1,35 @@
 import { component$ } from "@builder.io/qwik";
-import type { DocumentHead } from "@builder.io/qwik-city";
+import { routeLoader$, type DocumentHead } from "@builder.io/qwik-city";
+import type { MusicConnectionWire, MusicImportWire } from "@hamrah/shared";
 import { useUserLoader } from "../layout";
 import { PasskeyManagement } from "~/components/auth/passkey-management";
+import { MusicSyncPanel } from "~/components/music/music-sync-panel";
+import { createApiClient } from "~/lib/auth/api-client";
+
+function musicSyncError(error: unknown): string {
+  return error instanceof Error ? error.message : "Unable to load music sync.";
+}
+
+export const useMusicSyncLoader = routeLoader$(async (event) => {
+  const client = createApiClient(event);
+  try {
+    const [connections, imports] = await Promise.all([
+      client.get<MusicConnectionWire[]>("/v1/music/connections"),
+      client.get<MusicImportWire[]>("/v1/music/imports"),
+    ]);
+    return { connections, imports, error: undefined };
+  } catch (error) {
+    return {
+      connections: [],
+      imports: [],
+      error: musicSyncError(error),
+    };
+  }
+});
 
 export default component$(() => {
   const user = useUserLoader();
+  const musicSync = useMusicSyncLoader();
 
   return (
     <div class="min-h-screen">
@@ -177,6 +202,11 @@ export default component$(() => {
                 userEmail={user.value.email}
               />
             </div>
+            <MusicSyncPanel
+              initialConnections={musicSync.value.connections}
+              initialImports={musicSync.value.imports}
+              initialError={musicSync.value.error}
+            />
           </section>
         </div>
       </main>
