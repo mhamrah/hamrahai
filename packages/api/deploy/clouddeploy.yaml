@@ -1,0 +1,19 @@
+# Cloud Deploy is the declarative delivery layer for the Cloud Run API. The
+# GitHub workflow applies this configuration before creating each release.
+apiVersion: deploy.cloud.google.com/v1
+kind: DeliveryPipeline
+metadata:
+  name: hamrah-api
+description: Production delivery pipeline for the Hamrah API
+serialPipeline:
+  stages:
+    - targetId: production
+      profiles: []
+---
+apiVersion: deploy.cloud.google.com/v1
+kind: Target
+metadata:
+  name: production
+description: Production Cloud Run service
+run:
+  location: projects/hamrah-ai/locations/us-central1

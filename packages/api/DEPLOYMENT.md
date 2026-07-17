@@ -1,58 +1,124 @@
 # Deployment Guide
 
-## Cloud Run Service
+## Cloud Run service
 
-The application is deployed to Google Cloud Run:
+The API is deployed to Google Cloud Run through Cloud Deploy.
 
-- **Project**: hamrah-ai
-- **Region**: us-central1
-- **Service**: hamrah-api
+- **Project**: `hamrah-ai`
+- **Region**: `us-central1`
+- **Service**: `hamrah-api`
 - **URL**: https://hamrah-api-a7tefmgk7q-uc.a.run.app
-- **Billing mode**: Request-based billing (`--cpu-throttling`) so idle instances are not billed
+- **Billing mode**: Request-based billing (`cpu-throttling: true`)
 
-## Configuration
+## Declarative delivery configuration
 
-### Required Secrets
+Deployment is YAML-only. The checked-in configuration is the source of truth:
 
-Create the following secrets in Google Cloud Secret Manager:
+| File                            | Responsibility                                                                                  |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `deploy/cloud-run-service.yaml` | Complete Cloud Run service: scaling, probes, non-secret settings, and Secret Manager references |
+| `deploy/skaffold.yaml`          | Tells Cloud Deploy to render and deploy the Cloud Run manifest                                  |
+| `deploy/clouddeploy.yaml`       | Defines the production delivery pipeline and its target                                         |
 
-```bash
-# Database connection string
-gcloud secrets create DATABASE_URL \
-  --project=hamrah-ai \
-  --replication-policy=automatic
+GitHub Actions builds and pushes an image, resolves its immutable digest, then
+creates a Cloud Deploy release. Cloud Deploy replaces the `hamrah-api` image
+placeholder in the service manifest and records the rendered manifest.
 
-# JWT secret for authentication
-gcloud secrets create JWT_SECRET \
-  --project=hamrah-ai \
-  --replication-policy=automatic
-```
+`APPLE_TEAM_ID`, `SPOTIFY_CLIENT_ID`, and `TIDAL_CLIENT_ID` are non-secret
+GitHub repository variables. They are Cloud Deploy release parameters, declared
+with `from-param` directives in the service manifest. They are not interpolated
+into a shell-generated environment file. Other non-secret production settings
+live directly in `cloud-run-service.yaml`.
 
-Set secret values:
+Do not configure the service in the Cloud Run console or with ad-hoc `gcloud run
+deploy` flags; the next release replaces service configuration with the
+checked-in manifest.
 
-```bash
-# Set DATABASE_URL
-echo -n "postgresql://user:pass@host/db" | gcloud secrets versions add DATABASE_URL --data-file=-
+## Secret Manager configuration
 
-# Set JWT_SECRET
-echo -n "your-secure-random-string" | gcloud secrets versions add JWT_SECRET --data-file=-
-```
-
-Grant Cloud Run access to secrets:
+Create the runtime secrets:
 
 ```bash
-gcloud secrets add-iam-policy-binding DATABASE_URL \
-  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-
-gcloud secrets add-iam-policy-binding JWT_SECRET \
-  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
+for SECRET_NAME in DATABASE_URL JWT_SECRET SPOTIFY_CLIENT_SECRET MUSIC_TOKEN_ENCRYPTION_KEY; do
+  gcloud secrets create "$SECRET_NAME" \
+    --project=hamrah-ai \
+    --replication-policy=automatic
+done
 ```
 
-### Artifact Registry
+Add values without placing them in source control:
 
-Create Artifact Registry repository for container images:
+```bash
+printf '%s' 'postgresql://user:pass@host/db' | \
+  gcloud secrets versions add DATABASE_URL --data-file=-
+printf '%s' 'replace-with-a-secure-jwt-key' | \
+  gcloud secrets versions add JWT_SECRET --data-file=-
+printf '%s' 'spotify-client-secret' | \
+  gcloud secrets versions add SPOTIFY_CLIENT_SECRET --data-file=-
+printf '%s' '32-byte-base64url-encryption-key' | \
+  gcloud secrets versions add MUSIC_TOKEN_ENCRYPTION_KEY --data-file=-
+```
+
+The Cloud Run service identity must access every secret:
+
+```bash
+PROJECT_NUMBER=66020219411
+RUNTIME_SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+for SECRET_NAME in DATABASE_URL JWT_SECRET SPOTIFY_CLIENT_SECRET MUSIC_TOKEN_ENCRYPTION_KEY; do
+  gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
+    --project=hamrah-ai \
+    --member="serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" \
+    --role="roles/secretmanager.secretAccessor"
+done
+```
+
+Secrets use `secretKeyRef` in `cloud-run-service.yaml`. Never pass their values
+as Cloud Deploy parameters, GitHub variables, or Docker build arguments.
+
+## Music sync configuration
+
+The API alone communicates with music providers.
+
+| Runtime setting              | Source                                                                |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `SPOTIFY_CLIENT_ID`          | GitHub repository variable passed as a Cloud Deploy release parameter |
+| `SPOTIFY_CLIENT_SECRET`      | Secret Manager reference in the service manifest                      |
+| `SPOTIFY_REDIRECT_URI`       | `https://api.hamrah.app/v1/music/connections/spotify/callback`        |
+| `TIDAL_CLIENT_ID`            | GitHub repository variable passed as a Cloud Deploy release parameter |
+| `TIDAL_REDIRECT_URI`         | `https://api.hamrah.app/v1/music/connections/tidal/callback`          |
+| `MUSIC_TOKEN_ENCRYPTION_KEY` | Secret Manager reference used to encrypt provider tokens at rest      |
+| `WEB_APP_URL`                | `https://hamrah.app`                                                  |
+
+Register both callback URLs exactly with their providers. Spotify development
+mode users must be allowlisted. Run the first live TIDAL import against a test
+account after enabling `playlists.write`, `collection.write`, `search.read`, and
+`user.read`. Existing TIDAL connections must reconnect after new scopes deploy.
+See [MUSIC_IMPORT.md](MUSIC_IMPORT.md) for the full import contract.
+
+## Authentication runtime configuration
+
+The service manifest defines the WebAuthn RP ID and origin, OAuth audience
+allowlists, and CORS origin allowlist. Do not allow these values to fall back to
+localhost in Cloud Run.
+
+| Runtime setting             | Production value                                        |
+| --------------------------- | ------------------------------------------------------- |
+| `WEBAUTHN_RP_ID`            | `hamrah.app`                                            |
+| `WEBAUTHN_RP_ORIGIN`        | `https://hamrah.app`                                    |
+| `GOOGLE_ALLOWED_CLIENT_IDS` | The comma-separated web and iOS Google OAuth client IDs |
+| `APPLE_ALLOWED_CLIENT_IDS`  | `app.hamrah.ios,app.hamrah.web`                         |
+| `CORS_ALLOWED_ORIGINS`      | `https://hamrah.app`                                    |
+
+The Google audience allowlist must include the exact client ID in
+`packages/web/wrangler.toml` and the iOS `GIDClientID`.
+
+`hamrah.app` is the canonical web origin. If `www.hamrah.app` is added in
+Cloudflare, configure it as a DNS/redirect rule to the apex—do not serve the
+application from it, because the production WebAuthn origin is
+`https://hamrah.app`.
+
+## Artifact Registry
 
 ```bash
 gcloud artifacts repositories create hamrah \
@@ -61,66 +127,103 @@ gcloud artifacts repositories create hamrah \
   --project=hamrah-ai
 ```
 
-## Music Sync Configuration
+## GitHub Actions setup
 
-The API is the only component that communicates with music providers. Do not
-expose provider configuration to the web or native clients.
+### Required repository variables
 
-| Runtime setting | Purpose |
-| --- | --- |
-| `SPOTIFY_CLIENT_ID` | GitHub Actions repository variable; Spotify developer application client ID |
-| `SPOTIFY_CLIENT_SECRET` | Secret Manager secret; Spotify developer application client secret |
-| `SPOTIFY_REDIRECT_URI` | Deployment workflow value: `https://api.hamrah.app/v1/music/connections/spotify/callback` |
-| `TIDAL_CLIENT_ID` | GitHub Actions repository variable; TIDAL developer application client ID |
-| `TIDAL_REDIRECT_URI` | Deployment workflow value: `https://api.hamrah.app/v1/music/connections/tidal/callback` |
-| `MUSIC_TOKEN_ENCRYPTION_KEY` | Secret Manager secret; a 32-byte base64url key used only to encrypt provider tokens at rest |
-| `WEB_APP_URL` | Deployment workflow value: `https://hamrah.app` post-OAuth redirect destination |
+| Variable             | Value                                                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| `GCP_PROJECT_ID`     | `hamrah-ai`                                                                                         |
+| `GCP_PROJECT_NUMBER` | `66020219411`                                                                                       |
+| `GCP_REGION`         | `us-central1`                                                                                       |
+| `CLOUD_RUN_SERVICE`  | `hamrah-api`                                                                                        |
+| `GAR_LOCATION`       | `us-central1`                                                                                       |
+| `GAR_REPOSITORY`     | `hamrah`                                                                                            |
+| `GAR_REGISTRY`       | `us-central1-docker.pkg.dev`                                                                        |
+| `WIF_PROVIDER`       | `projects/66020219411/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `APPLE_TEAM_ID`      | Apple Developer Team ID for App Attest app IDs                                                      |
+| `SPOTIFY_CLIENT_ID`  | Spotify developer application client ID                                                             |
+| `TIDAL_CLIENT_ID`    | TIDAL developer application client ID                                                               |
+| `NEON_PROJECT_ID`    | Neon project ID for release validation branches                                                     |
+| `NEON_PARENT_BRANCH` | Sanitized Neon CI-branch parent                                                                     |
 
-Register both callback URLs exactly with their respective providers. Spotify
-development mode users must be allowlisted. Run the first live TIDAL import
-against a test account after enabling `playlists.write`, `collection.write`,
-`search.read`, and `user.read`. Existing TIDAL connections must reconnect after
-the new scopes are deployed. See [MUSIC_IMPORT.md](MUSIC_IMPORT.md) for the
-end-to-end import contract and manual integration check.
+### Required repository secrets
 
-## GitHub Actions Setup
+| Secret         | Purpose                                                  |
+| -------------- | -------------------------------------------------------- |
+| `NEON_API_KEY` | Creates and deletes short-lived Neon validation branches |
 
-### Required Repository Variables
+### Cloud Deploy bootstrap and IAM
 
-Configure the following GitHub Actions repository variables:
-
-| Variable | Value |
-| --- | --- |
-| `GCP_PROJECT_ID` | `hamrah-ai` |
-| `GCP_PROJECT_NUMBER` | `66020219411` |
-| `GCP_REGION` | `us-central1` |
-| `CLOUD_RUN_SERVICE` | `hamrah-api` |
-| `GAR_LOCATION` | `us-central1` |
-| `GAR_REPOSITORY` | `hamrah` |
-| `GAR_REGISTRY` | `us-central1-docker.pkg.dev` |
-| `WIF_PROVIDER` | `projects/66020219411/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
-| `APPLE_TEAM_ID` | Apple Developer Team ID used to verify App Attest app IDs |
-| `SPOTIFY_CLIENT_ID` | Spotify developer application client ID |
-| `TIDAL_CLIENT_ID` | TIDAL developer application client ID |
-| `NEON_PROJECT_ID` | Neon project ID used for API CI/release validation branches |
-| `NEON_PARENT_BRANCH` | Sanitized Neon branch used as the parent for short-lived CI branches |
-
-### Required Repository Secrets
-
-| Secret | Purpose |
-| --- | --- |
-| `NEON_API_KEY` | Creates and deletes short-lived Neon branches for API CI/release validation |
-
-### Workload Identity Federation Setup
+Enable Cloud Deploy once before the first release:
 
 ```bash
-# Create workload identity pool
+gcloud services enable clouddeploy.googleapis.com --project=hamrah-ai
+```
+
+The GitHub workload-identity principal applies the delivery-pipeline YAML and
+creates releases. Cloud Deploy uses the default Compute Engine service account
+to render and deploy the service.
+
+```bash
+WORKLOAD_IDENTITY_POOL_ID="projects/66020219411/locations/global/workloadIdentityPools/github-pool"
+GITHUB_REPO="mhamrah/hamrahai"
+PRINCIPAL_SET="principalSet://iam.googleapis.com/${WORKLOAD_IDENTITY_POOL_ID}/attribute.repository/${GITHUB_REPO}"
+EXECUTION_SERVICE_ACCOUNT="66020219411-compute@developer.gserviceaccount.com"
+
+# GitHub Actions: update Cloud Deploy configuration and create releases.
+gcloud projects add-iam-policy-binding hamrah-ai \
+  --member="${PRINCIPAL_SET}" \
+  --role="roles/clouddeploy.admin"
+
+gcloud iam service-accounts add-iam-policy-binding "${EXECUTION_SERVICE_ACCOUNT}" \
+  --project=hamrah-ai \
+  --member="${PRINCIPAL_SET}" \
+  --role="roles/iam.serviceAccountUser"
+
+# Cloud Deploy: render and deploy the public Cloud Run service.
+gcloud projects add-iam-policy-binding hamrah-ai \
+  --member="serviceAccount:${EXECUTION_SERVICE_ACCOUNT}" \
+  --role="roles/clouddeploy.jobRunner"
+
+gcloud projects add-iam-policy-binding hamrah-ai \
+  --member="serviceAccount:${EXECUTION_SERVICE_ACCOUNT}" \
+  --role="roles/run.admin"
+
+gcloud iam service-accounts add-iam-policy-binding "${EXECUTION_SERVICE_ACCOUNT}" \
+  --project=hamrah-ai \
+  --member="serviceAccount:${EXECUTION_SERVICE_ACCOUNT}" \
+  --role="roles/iam.serviceAccountUser"
+
+gcloud artifacts repositories add-iam-policy-binding hamrah \
+  --project=hamrah-ai \
+  --location=us-central1 \
+  --member="serviceAccount:${EXECUTION_SERVICE_ACCOUNT}" \
+  --role="roles/artifactregistry.reader"
+
+# GitHub Actions still builds and pushes images.
+gcloud artifacts repositories add-iam-policy-binding hamrah \
+  --project=hamrah-ai \
+  --location=us-central1 \
+  --member="${PRINCIPAL_SET}" \
+  --role="roles/artifactregistry.writer"
+```
+
+The public-access annotation needs `roles/run.admin` on the Cloud Deploy
+execution account. GitHub Actions receives `roles/clouddeploy.admin` because it
+applies the checked-in pipeline definition before every release; replace it with
+a restricted custom role later if desired.
+
+### Workload Identity Federation
+
+If the workload-identity pool is not already configured:
+
+```bash
 gcloud iam workload-identity-pools create github-pool \
   --project=hamrah-ai \
   --location=global \
   --display-name="GitHub Actions Pool"
 
-# Create provider. Keep the attribute condition scoped to the GitHub owner.
 gcloud iam workload-identity-pools providers create-oidc github-provider \
   --project=hamrah-ai \
   --location=global \
@@ -129,94 +232,55 @@ gcloud iam workload-identity-pools providers create-oidc github-provider \
   --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
   --attribute-condition="assertion.repository_owner == 'mhamrah'" \
   --issuer-uri="https://token.actions.githubusercontent.com"
-
-# Grant Direct WIF permissions to this repository principal.
-WORKLOAD_IDENTITY_POOL_ID="projects/66020219411/locations/global/workloadIdentityPools/github-pool"
-GITHUB_REPO="mhamrah/hamrahai"
-PRINCIPAL_SET="principalSet://iam.googleapis.com/${WORKLOAD_IDENTITY_POOL_ID}/attribute.repository/${GITHUB_REPO}"
-RUNTIME_SERVICE_ACCOUNT="66020219411-compute@developer.gserviceaccount.com"
-
-gcloud projects add-iam-policy-binding hamrah-ai \
-  --member="${PRINCIPAL_SET}" \
-  --role="roles/run.admin"
-
-gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SERVICE_ACCOUNT}" \
-  --project=hamrah-ai \
-  --member="${PRINCIPAL_SET}" \
-  --role="roles/iam.serviceAccountUser"
-
-gcloud artifacts repositories add-iam-policy-binding hamrah \
-  --project=hamrah-ai \
-  --location=us-central1 \
-  --member="${PRINCIPAL_SET}" \
-  --role="roles/artifactregistry.writer"
 ```
 
-## Manual Deployment
-
-To deploy manually:
+## Manual release
 
 ```bash
-# Build and push image
 IMAGE="us-central1-docker.pkg.dev/hamrah-ai/hamrah/hamrah-api:$(git rev-parse --short HEAD)"
 docker build -t "$IMAGE" .
 docker push "$IMAGE"
 
-# Deploy to Cloud Run
-gcloud run deploy hamrah-api \
-  --project hamrah-ai \
-  --region us-central1 \
-  --image "$IMAGE" \
-  --platform managed \
-  --allow-unauthenticated \
-  --min-instances 0 \
-  --max-instances 1 \
-  --memory 512Mi \
-  --cpu 1 \
-  --port 8080 \
-  --cpu-throttling \
-            --startup-probe httpGet.path=/readyz,httpGet.port=8080,initialDelaySeconds=10,periodSeconds=10,timeoutSeconds=3,failureThreshold=18 \
-            --liveness-probe httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=3,failureThreshold=3 \
-            --set-env-vars "RUST_LOG=info,APPLE_TEAM_ID=${APPLE_TEAM_ID}" \
-            --set-secrets "DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest"
+IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE" --format='value(image_summary.digest)')"
+IMAGE_REFERENCE="${IMAGE%:*}@${IMAGE_DIGEST}"
+
+gcloud deploy apply \
+  --file=packages/api/deploy/clouddeploy.yaml \
+  --project=hamrah-ai \
+  --region=us-central1
+
+gcloud deploy releases create "manual-$(date -u +%Y%m%d%H%M%S)" \
+  --delivery-pipeline=hamrah-api \
+  --project=hamrah-ai \
+  --region=us-central1 \
+  --source=packages/api/deploy \
+  --images="hamrah-api=${IMAGE_REFERENCE}" \
+  --deploy-parameters="apple_team_id=${APPLE_TEAM_ID},spotify_client_id=${SPOTIFY_CLIENT_ID},tidal_client_id=${TIDAL_CLIENT_ID}"
 ```
 
-## CI/CD Pipeline
+## CI/CD pipeline
 
-The GitHub Actions workflow (`.github/workflows/api-deploy.yml`) automatically:
+The GitHub workflow (`.github/workflows/api-deploy.yml`) authenticates using
+Workload Identity Federation, validates the API against a short-lived Neon
+branch, builds and pushes an Artifact Registry image, applies the checked-in
+Cloud Deploy configuration, and creates a digest-pinned release.
 
-1. Authenticates to Google Cloud using Workload Identity Federation
-2. Builds the Docker image
-3. Pushes to Artifact Registry
-4. Deploys to Cloud Run
+Deployments trigger on pushes to `main` that change `packages/api/**` or the
+deployment workflow, and on manual dispatch.
 
-Deployments trigger on:
-- Push to `main` branch
-- Manual workflow dispatch
+## Database migrations
 
-## Database Migrations
+Migrations run automatically on startup. If migration fails, the process exits
+before binding to port `8080`, so the new revision fails instead of serving
+against a stale schema.
 
-Migrations run automatically on application startup. The service will:
-1. Connect to the database
-2. Run pending migrations from `./migrations`
-3. Start accepting requests
-
-If migration fails, the process exits before binding to port `8080`, so the
-Cloud Run revision will fail startup instead of serving against a stale schema.
-
-## Health Checks
+## Health checks and monitoring
 
 - **Health endpoint**: `GET /healthz`
 - **Ready endpoint**: `GET /readyz`
 
-## Monitoring
-
-View logs and metrics:
-
 ```bash
-# View logs
 gcloud run services logs tail hamrah-api --region=us-central1
-
-# View service details
 gcloud run services describe hamrah-api --region=us-central1
+gcloud deploy releases list --delivery-pipeline=hamrah-api --region=us-central1
 ```

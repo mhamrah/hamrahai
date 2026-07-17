@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{auth::require_claims, db::DbPool};
+use crate::{auth::require_session_or_claims, db::DbPool};
 
 mod import;
 
@@ -204,7 +204,7 @@ fn query_value(value: &str) -> String {
 }
 
 pub async fn list_connections(State(pool): State<DbPool>, headers: HeaderMap) -> Response {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -220,7 +220,7 @@ pub async fn begin_connection(
     Path(provider): Path<String>,
     Json(request): Json<BeginConnectionRequest>,
 ) -> Response {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -276,7 +276,7 @@ pub async fn disconnect_connection(
     headers: HeaderMap,
     Path(provider): Path<String>,
 ) -> Response {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -553,7 +553,7 @@ pub async fn create_import(
     headers: HeaderMap,
     Json(request): Json<CreateImportRequest>,
 ) -> Response {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -631,7 +631,7 @@ pub async fn create_import(
 }
 
 pub async fn list_imports(State(pool): State<DbPool>, headers: HeaderMap) -> Response {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };

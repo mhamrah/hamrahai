@@ -206,6 +206,131 @@ async fn http_session_validate_without_cookie_returns_unauthorized() -> anyhow::
 }
 
 #[tokio::test]
+async fn http_music_connections_accept_a_valid_web_session() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-session-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Session Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &raw_session, 6).await?;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/music/connections")
+        .header("cookie", format!("session={raw_session}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let connections: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
+    assert!(connections.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_music_connection_begin_accepts_a_valid_web_session() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("SPOTIFY_CLIENT_ID", "test-spotify-client-id");
+        env::set_var(
+            "SPOTIFY_REDIRECT_URI",
+            "https://api.hamrah.app/v1/music/connections/spotify/callback",
+        );
+    }
+
+    let user_email = format!("music-begin-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Begin Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    let csrf_token = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &raw_session, 6).await?;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/music/connections/spotify/authorize")
+        .header("content-type", "application/json")
+        .header(
+            "cookie",
+            format!("session={raw_session}; csrf_token={csrf_token}"),
+        )
+        .header("x-csrf-token", csrf_token)
+        .body(Body::from(
+            json!({ "redirect_path": "/settings" }).to_string(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert!(
+        response["authorization_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("https://accounts.spotify.com/authorize?"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_webauthn_register_begin_accepts_a_valid_web_session() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("passkey-begin-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Passkey Begin Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    let csrf_token = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &raw_session, 6).await?;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/webauthn/register/begin")
+        .header("content-type", "application/json")
+        .header(
+            "cookie",
+            format!("session={raw_session}; csrf_token={csrf_token}"),
+        )
+        .header("x-csrf-token", csrf_token)
+        .body(Body::from(
+            json!({
+                "user_id": Uuid::new_v4(),
+                "email": "untrusted@example.com",
+                "display_name": "Passkey on this device"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(response["success"], true);
+    assert!(
+        response["challenge_id"]
+            .as_str()
+            .is_some_and(|challenge_id| !challenge_id.is_empty())
+    );
+    // webauthn-rs serializes browser creation options under `publicKey`, and
+    // the web client intentionally accepts this standards-compliant shape.
+    assert_eq!(response["options"]["publicKey"]["user"]["name"], user_email);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_session_logout_deletes_session_and_clears_cookies() -> anyhow::Result<()> {
     let Some((pool, router)) = setup_router().await? else {
         return Ok(());

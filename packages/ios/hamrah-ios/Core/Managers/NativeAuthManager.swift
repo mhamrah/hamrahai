@@ -563,7 +563,7 @@ class NativeAuthManager: NSObject, ObservableObject {
     private func performPlatformAuthentication(options: PublicKeyCredentialRequestOptions)
         async throws -> ASAuthorizationPlatformPublicKeyCredentialAssertion
     {
-        let challenge = Data(base64Encoded: options.challenge) ?? Data()
+        let challenge = Data(base64URLEncoded: options.challenge) ?? Data()
 
         let request = ASAuthorizationPlatformPublicKeyCredentialProvider(
             relyingPartyIdentifier: options.rpId
@@ -588,14 +588,14 @@ class NativeAuthManager: NSObject, ObservableObject {
         // Build SimpleWebAuthn-style assertion payload
         let body = WebAuthnDiscoverableVerifyRequest(
             response: WebAuthnAssertionCredential(
-                id: assertion.credentialID.base64EncodedString(),
-                rawId: assertion.credentialID.base64EncodedString(),
+                id: assertion.credentialID.base64URLEncodedString(),
+                rawId: assertion.credentialID.base64URLEncodedString(),
                 type: "public-key",
                 response: WebAuthnAssertionCredentialResponse(
-                    authenticatorData: assertion.rawAuthenticatorData.base64EncodedString(),
-                    clientDataJSON: assertion.rawClientDataJSON.base64EncodedString(),
-                    signature: assertion.signature.base64EncodedString(),
-                    userHandle: assertion.userID?.base64EncodedString() ?? ""
+                    authenticatorData: assertion.rawAuthenticatorData.base64URLEncodedString(),
+                    clientDataJSON: assertion.rawClientDataJSON.base64URLEncodedString(),
+                    signature: assertion.signature.base64URLEncodedString(),
+                    userHandle: assertion.userID?.base64URLEncodedString() ?? ""
                 )
             ),
             challenge_id: challengeId,

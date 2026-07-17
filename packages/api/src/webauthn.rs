@@ -10,6 +10,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
+use crate::auth::require_session_or_claims;
+
 // ============================================================================
 // WebAuthn Configuration
 // ============================================================================
@@ -295,6 +297,17 @@ pub async fn get_credentials_by_user(
     .await
 }
 
+async fn get_all_credentials(pool: &PgPool) -> Result<Vec<WebAuthnCredential>, sqlx::Error> {
+    sqlx::query_as::<_, WebAuthnCredential>(
+        r#"
+        SELECT * FROM webauthn_credentials
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn update_credential_counter(
     pool: &PgPool,
     credential_id: &str,
@@ -368,14 +381,31 @@ fn base64_url_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
 
 pub async fn register_begin(
     State((pool, config)): State<(PgPool, Arc<WebAuthnConfig>)>,
+    headers: HeaderMap,
     Json(req): Json<RegisterBeginRequest>,
 ) -> impl IntoResponse {
+    let claims = match require_session_or_claims(&pool, &headers).await {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(RegisterBeginResponse {
+                    success: false,
+                    options: None,
+                    challenge_id: None,
+                    error: Some("Authentication required".to_string()),
+                }),
+            );
+        }
+    };
+
     // Generate registration options
-    let user_name = req.email.clone();
-    let user_display_name = req.display_name.unwrap_or_else(|| req.email.clone());
+    let user_id = claims.sub;
+    let user_name = claims.email;
+    let user_display_name = req.display_name.unwrap_or_else(|| user_name.clone());
 
     // Get existing credentials to exclude them
-    let exclude_credentials = match get_credentials_by_user(&pool, req.user_id).await {
+    let exclude_credentials = match get_credentials_by_user(&pool, user_id).await {
         Ok(creds) => creds
             .iter()
             .filter_map(|c| {
@@ -387,7 +417,7 @@ pub async fn register_begin(
     };
 
     match config.webauthn.start_passkey_registration(
-        req.user_id,
+        user_id,
         &user_name,
         &user_display_name,
         Some(exclude_credentials),
@@ -400,7 +430,7 @@ pub async fn register_begin(
             let challenge_req = ChallengeCreateRequest {
                 id: challenge_id.clone(),
                 challenge: serde_json::to_string(&reg_state).unwrap_or_default(),
-                user_id: Some(req.user_id),
+                user_id: Some(user_id),
                 challenge_type: "registration".to_string(),
                 expires_at: expires_at.timestamp_millis(),
             };
@@ -440,8 +470,23 @@ pub async fn register_begin(
 
 pub async fn register_verify(
     State((pool, config)): State<(PgPool, Arc<WebAuthnConfig>)>,
+    headers: HeaderMap,
     Json(req): Json<RegisterVerifyRequest>,
 ) -> impl IntoResponse {
+    let claims = match require_session_or_claims(&pool, &headers).await {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(RegisterVerifyResponse {
+                    success: false,
+                    credential_id: None,
+                    error: Some("Authentication required".to_string()),
+                }),
+            );
+        }
+    };
+
     // Get the challenge from the database
     let challenge = match get_challenge(&pool, &req.challenge_id).await {
         Ok(c) => c,
@@ -466,6 +511,19 @@ pub async fn register_verify(
                 success: false,
                 credential_id: None,
                 error: Some("Challenge expired".to_string()),
+            }),
+        );
+    }
+
+    if challenge.user_id != Some(claims.sub) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(RegisterVerifyResponse {
+                success: false,
+                credential_id: None,
+                error: Some(
+                    "Passkey registration challenge does not belong to this user".to_string(),
+                ),
             }),
         );
     }
@@ -513,7 +571,7 @@ pub async fn register_verify(
     // Store the credential
     let cred_req = CredentialCreateRequest {
         id: credential_id.clone(),
-        user_id: challenge.user_id.unwrap_or_default(),
+        user_id: claims.sub,
         public_key: public_key_bytes,
         counter: 0, // Initial counter
         transports: None,
@@ -554,11 +612,56 @@ pub async fn authenticate_begin(
     State((pool, config)): State<(PgPool, Arc<WebAuthnConfig>)>,
     Json(_req): Json<AuthenticateBeginRequest>,
 ) -> impl IntoResponse {
-    // Start discoverable authentication (passkey)
-    // Empty credentials array allows any passkey to authenticate
-    let empty_creds: Vec<Passkey> = vec![];
+    // Explicit passkey sign-in has no user context, so include the registered
+    // credentials in the challenge state. Passing an empty set makes every
+    // valid assertion fail during verification.
+    let passkeys = match get_all_credentials(&pool).await {
+        Ok(credentials) => credentials
+            .into_iter()
+            .map(|credential| serde_json::from_slice::<Passkey>(&credential.public_key))
+            .collect::<Result<Vec<_>, _>>(),
+        Err(error) => {
+            tracing::error!(%error, "load passkeys for discoverable authentication");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthenticateBeginResponse {
+                    success: false,
+                    challenge_id: None,
+                    options: None,
+                    error: Some("Failed to prepare passkey authentication".to_string()),
+                }),
+            );
+        }
+    };
+    let passkeys = match passkeys {
+        Ok(passkeys) => passkeys,
+        Err(error) => {
+            tracing::error!(%error, "deserialize stored passkey");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthenticateBeginResponse {
+                    success: false,
+                    challenge_id: None,
+                    options: None,
+                    error: Some("Failed to prepare passkey authentication".to_string()),
+                }),
+            );
+        }
+    };
 
-    match config.webauthn.start_passkey_authentication(&empty_creds) {
+    if passkeys.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(AuthenticateBeginResponse {
+                success: false,
+                challenge_id: None,
+                options: None,
+                error: Some("No passkeys are registered".to_string()),
+            }),
+        );
+    }
+
+    match config.webauthn.start_passkey_authentication(&passkeys) {
         Ok((rcr, auth_state)) => {
             // Store the challenge
             let challenge_id = Uuid::new_v4().to_string();
@@ -703,7 +806,7 @@ pub async fn authenticate_verify(
 
     // Deserialize the stored passkey
     let passkey_json = String::from_utf8_lossy(&db_credential.public_key);
-    let _passkey: Passkey = match serde_json::from_str(&passkey_json) {
+    let mut passkey: Passkey = match serde_json::from_str(&passkey_json) {
         Ok(pk) => pk,
         Err(e) => {
             return (
@@ -725,7 +828,7 @@ pub async fn authenticate_verify(
     };
 
     // Verify the authentication response using the passkey
-    let _auth_result = match config
+    let auth_result = match config
         .webauthn
         .finish_passkey_authentication(&req.response, &auth_state)
     {
@@ -749,10 +852,75 @@ pub async fn authenticate_verify(
         }
     };
 
-    // Update credential counter - increment from database value
-    let new_counter = db_credential.counter + 1;
-    let _ = update_credential_counter(&pool, credential_id, new_counter, Some(chrono::Utc::now()))
-        .await;
+    // Persist the authenticator's actual counter and backup state. A synthetic
+    // database increment is not sufficient for WebAuthn signature-counter
+    // verification on later assertions.
+    if passkey.update_credential(&auth_result).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AuthenticateVerifyResponse {
+                success: false,
+                message: None,
+                user: None,
+                session_token: None,
+                access_token: None,
+                refresh_token: None,
+                expires_in: None,
+                expires_at: None,
+                error: Some("Credential did not match authentication response".to_string()),
+            }),
+        )
+            .into_response();
+    }
+
+    let serialized_passkey = match serde_json::to_vec(&passkey) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "serialize authenticated passkey");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthenticateVerifyResponse {
+                    success: false,
+                    message: None,
+                    user: None,
+                    session_token: None,
+                    access_token: None,
+                    refresh_token: None,
+                    expires_in: None,
+                    expires_at: None,
+                    error: Some("Failed to update passkey state".to_string()),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(error) = sqlx::query(
+        "UPDATE webauthn_credentials SET public_key = $2, counter = $3, last_used = NOW() WHERE id = $1",
+    )
+    .bind(credential_id)
+    .bind(serialized_passkey)
+    .bind(i64::from(auth_result.counter()))
+    .execute(&pool)
+    .await
+    {
+        tracing::error!(%error, "persist authenticated passkey state");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AuthenticateVerifyResponse {
+                success: false,
+                message: None,
+                user: None,
+                session_token: None,
+                access_token: None,
+                refresh_token: None,
+                expires_in: None,
+                expires_at: None,
+                error: Some("Failed to update passkey state".to_string()),
+            }),
+        )
+            .into_response();
+    }
 
     // Get user information
     let user = match crate::db::get_user_by_id(&pool, db_credential.user_id).await {

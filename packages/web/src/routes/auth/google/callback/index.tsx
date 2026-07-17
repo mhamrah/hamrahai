@@ -1,5 +1,8 @@
 import type { RequestHandler } from "@builder.io/qwik-city";
-import { getGoogleProvider } from "~/lib/auth/providers";
+import {
+  buildGoogleNativeAuthRequest,
+  getGoogleProvider,
+} from "~/lib/auth/providers";
 import { setSessionTokenCookie } from "~/lib/auth/session";
 import { createApiClient } from "~/lib/auth/api-client";
 import { safeRedirectPath } from "~/lib/auth/redirects";
@@ -58,51 +61,30 @@ export const onGet: RequestHandler = async (event) => {
     throw new Error("No ID token received from Google");
   }
 
-  const idTokenPayload = JSON.parse(atob(idToken.split(".")[1]));
-
-  // OpenID Connect standard claims + Google-specific claims
-  const googleUser = {
-    sub: idTokenPayload.sub, // Subject (unique user ID)
-    email: idTokenPayload.email,
-    email_verified: idTokenPayload.email_verified,
-    name: idTokenPayload.name,
-    given_name: idTokenPayload.given_name, // First name
-    family_name: idTokenPayload.family_name, // Last name
-    picture: idTokenPayload.picture,
-    locale: idTokenPayload.locale, // Language preference
-    hd: idTokenPayload.hd, // Hosted domain (for Google Workspace users)
-  };
-
-  // Additional claims available but not currently stored:
-  // - aud: Audience (your client_id)
-  // - iss: Issuer (https://accounts.google.com)
-  // - iat: Issued at time
-  // - exp: Expiration time
-  // - at_hash: Access token hash
-
   try {
-    // Create user and session via public API
     const apiClient = createApiClient(event);
-    const authResult = await apiClient.nativeAuth({
-      email: googleUser.email,
-      name: googleUser.name,
-      picture: googleUser.picture,
-      provider: "google",
-      provider_id: googleUser.sub,
-      auth_method: "google",
-      platform: "web",
-      email_verified_at: googleUser.email_verified
-        ? new Date().toISOString()
-        : undefined,
-    });
+    const authResult = await apiClient.nativeAuth(
+      buildGoogleNativeAuthRequest(idToken),
+    );
 
-    if (authResult.refresh_token) {
-      const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30); // 30 days
-      setSessionTokenCookie(event, authResult.refresh_token, expiresAt);
+    if (!authResult.refresh_token) {
+      throw new Error("Google sign-in did not create a session");
     }
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+    setSessionTokenCookie(event, authResult.refresh_token, expiresAt);
   } catch (error) {
-    console.log("could not authenticate with API", error);
-    throw error;
+    console.error(
+      "Google sign-in could not create an API session",
+      error instanceof Error ? error.message : "unknown error",
+    );
+    event.cookie.delete("google_oauth_state");
+    event.cookie.delete("google_oauth_code_verifier");
+    event.cookie.delete("google_oauth_redirect");
+    throw event.redirect(
+      302,
+      "/auth/login?error=" +
+        encodeURIComponent("Unable to sign in with Google. Please try again."),
+    );
   }
 
   // Clear OAuth cookies
