@@ -293,7 +293,7 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
     let csrf_token = Uuid::new_v4().to_string();
     create_session(&pool, user.id, &raw_session, 6).await?;
     let import_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO music_import_runs (id,user_id,status,stage,started_at,completed_at,error) VALUES ($1,$2,'failed','failed',NOW(),NOW(),'provider connection expired')")
+    sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,status,stage,started_at,completed_at,error) VALUES ($1,$2,'spotify','tidal','failed','failed',NOW(),NOW(),'provider connection expired')")
         .bind(import_id)
         .bind(user.id)
         .execute(&pool)
@@ -339,7 +339,7 @@ async fn http_music_import_list_marks_stalled_run_restartable() -> anyhow::Resul
     let raw_session = Uuid::new_v4().to_string();
     create_session(&pool, user.id, &raw_session, 6).await?;
     let import_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO music_import_runs (id,user_id,status,stage,started_at,progress_updated_at) VALUES ($1,$2,'running','creating_playlists',NOW(),NOW() - INTERVAL '6 minutes')")
+    sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,status,stage,started_at,progress_updated_at) VALUES ($1,$2,'spotify','tidal','running','creating_playlists',NOW(),NOW() - INTERVAL '6 minutes')")
         .bind(import_id)
         .bind(user.id)
         .execute(&pool)
