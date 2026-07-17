@@ -16,9 +16,11 @@ use uuid::Uuid;
 
 use crate::{auth::require_claims, db::DbPool};
 
+mod import;
+
 const SPOTIFY_SCOPES: &str =
     "user-read-private playlist-read-private playlist-read-collaborative user-follow-read";
-const TIDAL_SCOPES: &str = "playlists.write collection.write";
+const TIDAL_SCOPES: &str = "playlists.write collection.write search.read user.read";
 
 #[derive(Deserialize)]
 pub struct BeginConnectionRequest {
@@ -37,11 +39,30 @@ struct ProviderTokenResponse {
     expires_in: Option<i64>,
     scope: Option<String>,
 }
+#[derive(Deserialize)]
+struct SpotifyAccountResponse {
+    id: String,
+}
+#[derive(Deserialize)]
+struct TidalAccountResponse {
+    data: TidalAccountData,
+}
+#[derive(Deserialize)]
+struct TidalAccountData {
+    id: String,
+}
 #[derive(sqlx::FromRow)]
 struct OAuthState {
     user_id: Uuid,
     code_verifier: String,
     redirect_path: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredMusicConnection {
+    access_token_encrypted: Option<String>,
+    refresh_token_encrypted: Option<String>,
+    token_expires_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -147,6 +168,28 @@ fn encrypt_token_with_key(token: &str, key: &[u8]) -> Result<String, String> {
         URL_SAFE_NO_PAD.encode(nonce),
         URL_SAFE_NO_PAD.encode(ciphertext)
     ))
+}
+fn decrypt_token(token: &str) -> Result<String, String> {
+    let value = env("MUSIC_TOKEN_ENCRYPTION_KEY")?;
+    let key = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| "MUSIC_TOKEN_ENCRYPTION_KEY must be base64url".to_string())?;
+    decrypt_token_with_key(token, &key)
+}
+fn decrypt_token_with_key(token: &str, key: &[u8]) -> Result<String, String> {
+    let (nonce, ciphertext) = token
+        .split_once('.')
+        .ok_or_else(|| "stored provider token is invalid".to_string())?;
+    let nonce = URL_SAFE_NO_PAD
+        .decode(nonce)
+        .map_err(|_| "stored provider token is invalid".to_string())?;
+    let ciphertext = URL_SAFE_NO_PAD
+        .decode(ciphertext)
+        .map_err(|_| "stored provider token is invalid".to_string())?;
+    let plaintext = cipher(key)?
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| "stored provider token could not be decrypted".to_string())?;
+    String::from_utf8(plaintext).map_err(|_| "stored provider token is invalid".to_string())
 }
 fn query_value(value: &str) -> String {
     value.bytes().fold(String::new(), |mut encoded, byte| {
@@ -290,6 +333,7 @@ pub async fn complete_connection(
             return error(StatusCode::BAD_GATEWAY, "provider authorization failed");
         }
     };
+    let provider_account_id = provider_account_id(&provider, &token.access_token).await;
     let access = match encrypt_token(&token.access_token) {
         Ok(value) => value,
         Err(message) => return error(StatusCode::SERVICE_UNAVAILABLE, &message),
@@ -312,8 +356,8 @@ pub async fn complete_connection(
     let expiry = token
         .expires_in
         .map(|seconds| Utc::now() + Duration::seconds(seconds));
-    if let Err(err) = sqlx::query("INSERT INTO music_connections (id,user_id,provider,access_token_encrypted,refresh_token_encrypted,token_expires_at,granted_scopes,status,connected_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'connected',NOW()) ON CONFLICT (user_id,provider) DO UPDATE SET access_token_encrypted=EXCLUDED.access_token_encrypted, refresh_token_encrypted=EXCLUDED.refresh_token_encrypted, token_expires_at=EXCLUDED.token_expires_at, granted_scopes=EXCLUDED.granted_scopes, status='connected', last_error=NULL, connected_at=NOW(), updated_at=NOW()")
-        .bind(Uuid::new_v4()).bind(row.user_id).bind(&provider).bind(access).bind(refresh).bind(expiry).bind(scopes).execute(&pool).await { tracing::error!(%err, "store music connection"); return error(StatusCode::INTERNAL_SERVER_ERROR, "could not save music connection"); }
+    if let Err(err) = sqlx::query("INSERT INTO music_connections (id,user_id,provider,provider_account_id,access_token_encrypted,refresh_token_encrypted,token_expires_at,granted_scopes,status,connected_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'connected',NOW()) ON CONFLICT (user_id,provider) DO UPDATE SET provider_account_id=COALESCE(EXCLUDED.provider_account_id, music_connections.provider_account_id), access_token_encrypted=EXCLUDED.access_token_encrypted, refresh_token_encrypted=EXCLUDED.refresh_token_encrypted, token_expires_at=EXCLUDED.token_expires_at, granted_scopes=EXCLUDED.granted_scopes, status='connected', last_error=NULL, connected_at=NOW(), updated_at=NOW()")
+        .bind(Uuid::new_v4()).bind(row.user_id).bind(&provider).bind(provider_account_id).bind(access).bind(refresh).bind(expiry).bind(scopes).execute(&pool).await { tracing::error!(%err, "store music connection"); return error(StatusCode::INTERNAL_SERVER_ERROR, "could not save music connection"); }
     axum::response::Redirect::temporary(&format!(
         "{}{}?music_connection={provider}",
         std::env::var("WEB_APP_URL").unwrap_or_else(|_| "https://hamrah.app".to_string()),
@@ -372,6 +416,138 @@ async fn exchange_code(
     }
 }
 
+async fn provider_account_id(provider: &str, access_token: &str) -> Option<String> {
+    let client = reqwest::Client::new();
+    match provider {
+        "spotify" => client
+            .get("https://api.spotify.com/v1/me")
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json::<SpotifyAccountResponse>()
+            .await
+            .ok()
+            .map(|account| account.id),
+        "tidal" => client
+            .get("https://openapi.tidal.com/v2/users/me")
+            .bearer_auth(access_token)
+            .header("accept", "application/vnd.api+json")
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json::<TidalAccountResponse>()
+            .await
+            .ok()
+            .map(|account| account.data.id),
+        _ => None,
+    }
+}
+
+async fn refresh_provider_token(
+    provider: &str,
+    refresh_token: &str,
+) -> Result<ProviderTokenResponse, String> {
+    let client = reqwest::Client::new();
+    match provider {
+        "spotify" => {
+            let client_id = env("SPOTIFY_CLIENT_ID")?;
+            let client_secret = env("SPOTIFY_CLIENT_SECRET")?;
+            client
+                .post("https://accounts.spotify.com/api/token")
+                .basic_auth(client_id, Some(client_secret))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(format!(
+                    "grant_type=refresh_token&refresh_token={}",
+                    query_value(refresh_token)
+                ))
+                .send()
+                .await
+                .map_err(|error| error.to_string())?
+                .error_for_status()
+                .map_err(|error| error.to_string())?
+                .json()
+                .await
+                .map_err(|error| error.to_string())
+        }
+        "tidal" => {
+            let client_id = env("TIDAL_CLIENT_ID")?;
+            client
+                .post("https://auth.tidal.com/v1/oauth2/token")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(format!(
+                    "grant_type=refresh_token&client_id={}&refresh_token={}",
+                    query_value(&client_id),
+                    query_value(refresh_token)
+                ))
+                .send()
+                .await
+                .map_err(|error| error.to_string())?
+                .error_for_status()
+                .map_err(|error| error.to_string())?
+                .json()
+                .await
+                .map_err(|error| error.to_string())
+        }
+        _ => Err("unsupported provider".to_string()),
+    }
+}
+
+async fn access_token_for_import(
+    pool: &DbPool,
+    user_id: Uuid,
+    provider: &str,
+) -> Result<String, String> {
+    let connection = sqlx::query_as::<_, StoredMusicConnection>(
+        "SELECT access_token_encrypted, refresh_token_encrypted, token_expires_at FROM music_connections WHERE user_id = $1 AND provider = $2 AND status = 'connected'",
+    )
+    .bind(user_id)
+    .bind(provider)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| format!("{provider} is not connected"))?;
+    let access_token = connection
+        .access_token_encrypted
+        .as_deref()
+        .ok_or_else(|| format!("{provider} authorization is incomplete"))?;
+    let expires_soon = connection
+        .token_expires_at
+        .is_some_and(|expires_at| expires_at <= Utc::now() + Duration::seconds(30));
+    if !expires_soon {
+        return decrypt_token(access_token);
+    }
+    let refresh_token = connection
+        .refresh_token_encrypted
+        .as_deref()
+        .ok_or_else(|| format!("{provider} authorization expired; reconnect to continue"))?;
+    let refresh_token = decrypt_token(refresh_token)?;
+    let refreshed = refresh_provider_token(provider, &refresh_token).await?;
+    let access_token_encrypted = encrypt_token(&refreshed.access_token)?;
+    let refresh_token_encrypted = refreshed
+        .refresh_token
+        .as_deref()
+        .map(encrypt_token)
+        .transpose()?;
+    let expires_at = refreshed
+        .expires_in
+        .map(|seconds| Utc::now() + Duration::seconds(seconds));
+    sqlx::query("UPDATE music_connections SET access_token_encrypted = $1, refresh_token_encrypted = COALESCE($2, refresh_token_encrypted), token_expires_at = $3, status = 'connected', last_error = NULL, updated_at = NOW() WHERE user_id = $4 AND provider = $5")
+        .bind(access_token_encrypted)
+        .bind(refresh_token_encrypted)
+        .bind(expires_at)
+        .bind(user_id)
+        .bind(provider)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(refreshed.access_token)
+}
+
 pub async fn create_import(
     State(pool): State<DbPool>,
     headers: HeaderMap,
@@ -398,9 +574,59 @@ pub async fn create_import(
         );
     }
     let id = Uuid::new_v4();
-    match sqlx::query_as::<_, MusicImportResponse>("INSERT INTO music_import_runs (id,user_id,include_owned_playlists,include_saved_playlists,include_followed_artists) VALUES ($1,$2,$3,$4,$5) RETURNING id,status,total_items,imported_items,unmatched_items,error,created_at")
-        .bind(id).bind(claims.sub).bind(request.include_owned_playlists).bind(request.include_saved_playlists).bind(request.include_followed_artists).fetch_one(&pool).await {
-        Ok(row) => (StatusCode::ACCEPTED, Json(row)).into_response(), Err(err) => { tracing::error!(%err, "create music import"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not create music import") }
+    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,status,started_at) VALUES ($1,$2,$3,$4,$5,'running',NOW())")
+        .bind(id).bind(claims.sub).bind(request.include_owned_playlists).bind(request.include_saved_playlists).bind(request.include_followed_artists).execute(&pool).await {
+        tracing::error!(%err, "create music import");
+        return error(StatusCode::CONFLICT, "another music import is already running");
+    }
+
+    let result = async {
+        let spotify_access_token = access_token_for_import(&pool, claims.sub, "spotify")
+            .await
+            .map_err(|message| import::ImportFailure {
+                message,
+                outcome: import::ImportOutcome::default(),
+            })?;
+        let tidal_access_token = access_token_for_import(&pool, claims.sub, "tidal")
+            .await
+            .map_err(|message| import::ImportFailure {
+                message,
+                outcome: import::ImportOutcome::default(),
+            })?;
+        let provider =
+            import::HttpMusicImportProvider::new(spotify_access_token, tidal_access_token);
+        import::execute_import(
+            &provider,
+            id,
+            import::ImportOptions {
+                include_owned_playlists: request.include_owned_playlists,
+                include_saved_playlists: request.include_saved_playlists,
+                include_followed_artists: request.include_followed_artists,
+            },
+        )
+        .await
+    }
+    .await;
+
+    let (status, outcome, import_error) = match result {
+        Ok(outcome) if outcome.unmatched_items == 0 => ("completed", outcome, None),
+        Ok(outcome) => ("partial", outcome, None),
+        Err(failure) => {
+            tracing::warn!(error = %failure.message, "music import failed");
+            (
+                "failed",
+                failure.outcome,
+                Some(
+                    "could not complete music import; reconnect both providers and try again"
+                        .to_string(),
+                ),
+            )
+        }
+    };
+    match sqlx::query_as::<_, MusicImportResponse>("UPDATE music_import_runs SET status = $1, total_items = $2, imported_items = $3, unmatched_items = $4, error = $5, completed_at = NOW() WHERE id = $6 RETURNING id,status,total_items,imported_items,unmatched_items,error,created_at")
+        .bind(status).bind(outcome.total_items).bind(outcome.imported_items).bind(outcome.unmatched_items).bind(import_error).bind(id).fetch_one(&pool).await {
+        Ok(row) => (StatusCode::CREATED, Json(row)).into_response(),
+        Err(err) => { tracing::error!(%err, "complete music import"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not complete music import") }
     }
 }
 
@@ -439,6 +665,14 @@ mod tests {
             !encrypt_token_with_key("provider-secret", &[7u8; 32])
                 .unwrap()
                 .contains("provider-secret")
+        );
+    }
+    #[test]
+    fn encrypted_token_round_trips() {
+        let encrypted = encrypt_token_with_key("provider-secret", &[7u8; 32]).unwrap();
+        assert_eq!(
+            decrypt_token_with_key(&encrypted, &[7u8; 32]).unwrap(),
+            "provider-secret"
         );
     }
 }

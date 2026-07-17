@@ -78,7 +78,10 @@ expose provider configuration to the web or native clients.
 
 Register both callback URLs exactly with their respective providers. Spotify
 development mode users must be allowlisted. Run the first live TIDAL import
-against a test account after enabling its playlist and collection write scopes.
+against a test account after enabling `playlists.write`, `collection.write`,
+`search.read`, and `user.read`. Existing TIDAL connections must reconnect after
+the new scopes are deployed. See [MUSIC_IMPORT.md](MUSIC_IMPORT.md) for the
+end-to-end import contract and manual integration check.
 
 ## GitHub Actions Setup
 
