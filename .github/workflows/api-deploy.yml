@@ -29,6 +29,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.0
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: api
+          workspaces: packages/api -> target
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -95,16 +101,23 @@ jobs:
       - name: Configure Docker auth
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Build and push image
-        working-directory: packages/api
+        id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: packages/api
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}
+          cache-from: type=gha,scope=hamrah-api
+          cache-to: type=gha,mode=max,scope=hamrah-api
+
+      - name: Record image digest
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-          IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE" --format='value(image_summary.digest)')"
-          test -n "$IMAGE_DIGEST"
-          IMAGE_REPOSITORY="${IMAGE%:*}"
-          echo "IMAGE_DIGEST=${IMAGE_REPOSITORY}@${IMAGE_DIGEST}" >> "$GITHUB_ENV"
+          IMAGE_REPOSITORY="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}"
+          echo "IMAGE_DIGEST=${IMAGE_REPOSITORY}@${{ steps.image.outputs.digest }}" >> "$GITHUB_ENV"
 
       - name: Apply Cloud Deploy pipeline configuration
         run: |
