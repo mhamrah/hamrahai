@@ -64,6 +64,13 @@ jobs:
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Cache Rust dependencies
+        if: steps.changes.outputs.should_run == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: api
+          workspaces: packages/api -> target
+
       - name: Skip API tests
         if: steps.changes.outputs.should_run != 'true'
         working-directory: .
