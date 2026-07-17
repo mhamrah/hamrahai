@@ -282,6 +282,93 @@ async fn http_music_connection_begin_accepts_a_valid_web_session() -> anyhow::Re
 }
 
 #[tokio::test]
+async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-restart-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Restart Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    let csrf_token = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &raw_session, 6).await?;
+    let import_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,status,stage,started_at,completed_at,error) VALUES ($1,$2,'spotify','tidal','failed','failed',NOW(),NOW(),'provider connection expired')")
+        .bind(import_id)
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/music/imports/{import_id}/restart"))
+        .header(
+            "cookie",
+            format!("session={raw_session}; csrf_token={csrf_token}"),
+        )
+        .header("x-csrf-token", csrf_token)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let import_id = import_id.to_string();
+    assert_eq!(response["id"].as_str(), Some(import_id.as_str()));
+    assert_eq!(response["status"], "failed");
+
+    let run_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM music_import_runs WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(run_count, 1, "restart must not create a duplicate run");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_music_import_list_marks_stalled_run_restartable() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-stalled-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Stalled Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &raw_session, 6).await?;
+    let import_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,status,stage,started_at,progress_updated_at) VALUES ($1,$2,'spotify','tidal','running','creating_playlists',NOW(),NOW() - INTERVAL '6 minutes')")
+        .bind(import_id)
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/music/imports")
+        .header("cookie", format!("session={raw_session}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let imports: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(imports.len(), 1);
+    let import_id = import_id.to_string();
+    assert_eq!(imports[0]["id"].as_str(), Some(import_id.as_str()));
+    assert_eq!(imports[0]["status"], "failed");
+    assert_eq!(
+        imports[0]["error"].as_str(),
+        Some("music import stopped reporting progress; restart it to continue safely")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_webauthn_register_begin_accepts_a_valid_web_session() -> anyhow::Result<()> {
     let Some((pool, router)) = setup_router().await? else {
         return Ok(());

@@ -1,4 +1,4 @@
-import { $, component$, useSignal } from "@builder.io/qwik";
+import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import type {
   MusicConnectionWire,
   MusicImportWire,
@@ -7,6 +7,34 @@ import type {
 import { createApiClient } from "~/lib/auth/api-client";
 
 const providers: MusicProvider[] = ["spotify", "tidal"];
+
+const isActiveImport = (run: MusicImportWire) =>
+  run.status === "queued" || run.status === "running";
+
+const canRestartImport = (run: MusicImportWire) =>
+  run.status === "failed" || run.status === "partial";
+
+const importStage = (run: MusicImportWire) => {
+  switch (run.stage) {
+    case "queued":
+    case "preparing":
+      return "Preparing secure connections";
+    case "reading_spotify":
+      return "Reading selected Spotify collections";
+    case "creating_playlists":
+      return `Creating TIDAL playlists: ${run.playlists_imported} of ${run.playlist_total}`;
+    case "matching_artists":
+      return `Checking artists for exact TIDAL matches: ${run.artists_checked} of ${run.artist_total}`;
+    case "following_artists":
+      return `Following exact TIDAL matches: ${run.artists_followed} of ${run.artists_matched}`;
+    case "completed":
+      return run.status === "partial"
+        ? "Completed with unmatched artists"
+        : "Completed";
+    case "failed":
+      return "Import failed";
+  }
+};
 
 type MusicSyncPanelProps = {
   initialConnections: MusicConnectionWire[];
@@ -20,6 +48,23 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
   const error = useSignal<string | undefined>(props.initialError);
   const includeSaved = useSignal(false);
   const isImporting = useSignal(false);
+
+  // eslint-disable-next-line qwik/no-use-visible-task -- Polling must run in the signed-in browser session.
+  useVisibleTask$(({ cleanup, track }) => {
+    const latestImport = track(() => imports.value.at(0));
+    if (!latestImport || !isActiveImport(latestImport)) return;
+
+    const refresh = async () => {
+      try {
+        imports.value =
+          await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
+      } catch {
+        // Preserve the most recent status while a transient network request fails.
+      }
+    };
+    const timer = window.setInterval(refresh, 2_000);
+    cleanup(() => window.clearInterval(timer));
+  });
 
   const connect = $(async (provider: MusicProvider) => {
     error.value = undefined;
@@ -41,6 +86,14 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
   const startImport = $(async () => {
     error.value = undefined;
     isImporting.value = true;
+    const refreshTimer = window.setInterval(async () => {
+      try {
+        imports.value =
+          await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
+      } catch {
+        // The completed request will still surface its result or error below.
+      }
+    }, 500);
     try {
       const client = createApiClient();
       const run = await client.post<MusicImportWire>("/v1/music/imports", {
@@ -50,9 +103,51 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
       });
       imports.value = [run, ...imports.value];
     } catch (cause) {
+      try {
+        const currentImports =
+          await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
+        imports.value = currentImports;
+        if (currentImports[0] && isActiveImport(currentImports[0])) return;
+        if (currentImports[0] && canRestartImport(currentImports[0])) {
+          error.value =
+            "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.";
+          return;
+        }
+      } catch {
+        // Show the original start error when the status refresh also fails.
+      }
       error.value =
         cause instanceof Error ? cause.message : "Unable to start import.";
     } finally {
+      window.clearInterval(refreshTimer);
+      isImporting.value = false;
+    }
+  });
+
+  const restartImport = $(async (importId: string) => {
+    error.value = undefined;
+    isImporting.value = true;
+    const refreshTimer = window.setInterval(async () => {
+      try {
+        imports.value =
+          await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
+      } catch {
+        // The completed request will still surface its result or error below.
+      }
+    }, 500);
+    try {
+      const run = await createApiClient().post<MusicImportWire>(
+        `/v1/music/imports/${importId}/restart`,
+      );
+      imports.value = [
+        run,
+        ...imports.value.filter((item) => item.id !== run.id),
+      ];
+    } catch (cause) {
+      error.value =
+        cause instanceof Error ? cause.message : "Unable to restart import.";
+    } finally {
+      window.clearInterval(refreshTimer);
       isImporting.value = false;
     }
   });
@@ -118,6 +213,11 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         <input
           type="checkbox"
           checked={includeSaved.value}
+          disabled={Boolean(
+            imports.value[0] &&
+            (isActiveImport(imports.value[0]) ||
+              canRestartImport(imports.value[0])),
+          )}
           onChange$={(event) => {
             includeSaved.value = (event.target as HTMLInputElement).checked;
           }}
@@ -127,18 +227,51 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
       <button
         class="mt-4 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
         disabled={
-          isImporting.value || !connected("spotify") || !connected("tidal")
+          isImporting.value ||
+          Boolean(imports.value[0] && isActiveImport(imports.value[0])) ||
+          !connected("spotify") ||
+          !connected("tidal")
         }
-        onClick$={startImport}
+        onClick$={() => {
+          const latestImport = imports.value.at(0);
+          return latestImport && canRestartImport(latestImport)
+            ? restartImport(latestImport.id)
+            : startImport();
+        }}
       >
-        {isImporting.value ? "Importing…" : "Start import"}
+        {isImporting.value
+          ? "Importing…"
+          : imports.value[0] && isActiveImport(imports.value[0])
+            ? "Import in progress"
+            : imports.value[0]?.status === "failed"
+              ? "Restart failed import"
+              : imports.value[0]?.status === "partial"
+                ? "Retry partial import"
+                : "Start import"}
       </button>
       {imports.value[0] && (
-        <p class="mt-3 text-sm text-gray-600">
-          Latest import: {imports.value[0].status} ·{" "}
-          {imports.value[0].imported_items} created or followed ·{" "}
-          {imports.value[0].unmatched_items} unmatched
-        </p>
+        <div class="mt-3 rounded-md bg-gray-50 p-3 text-sm text-gray-600">
+          <p class="font-medium text-gray-950">
+            {importStage(imports.value[0])}
+          </p>
+          <p class="mt-1">
+            Selected from Spotify: {imports.value[0].playlist_total} playlists
+            and {imports.value[0].artist_total} followed artists.
+          </p>
+          <p class="mt-1">
+            {imports.value[0].playlists_imported} playlists created ·{" "}
+            {imports.value[0].artists_followed} artists followed ·{" "}
+            {imports.value[0].unmatched_items} unmatched
+          </p>
+          {canRestartImport(imports.value[0]) && (
+            <p class="mt-1">
+              Restarting reuses this import's original TIDAL idempotency keys.
+            </p>
+          )}
+          {imports.value[0].error && (
+            <p class="mt-1 text-red-700">{imports.value[0].error}</p>
+          )}
+        </div>
       )}
     </section>
   );

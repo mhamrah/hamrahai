@@ -1,0 +1,2 @@
+ALTER TABLE music_import_runs
+    ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();

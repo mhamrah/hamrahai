@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, future::Future};
 
 use reqwest::Client;
 use serde::Deserialize;
@@ -51,10 +51,38 @@ pub(super) struct ImportOutcome {
     pub unmatched_items: i32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ImportProgress {
+    pub stage: &'static str,
+    pub playlist_total: i32,
+    pub playlists_imported: i32,
+    pub artist_total: i32,
+    pub artists_checked: i32,
+    pub artists_matched: i32,
+    pub artists_followed: i32,
+    pub artists_unmatched: i32,
+}
+
+impl Default for ImportProgress {
+    fn default() -> Self {
+        Self {
+            stage: "preparing",
+            playlist_total: 0,
+            playlists_imported: 0,
+            artist_total: 0,
+            artists_checked: 0,
+            artists_matched: 0,
+            artists_followed: 0,
+            artists_unmatched: 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ImportFailure {
     pub message: String,
     pub outcome: ImportOutcome,
+    pub progress: ImportProgress,
 }
 
 pub(super) trait MusicImportProvider {
@@ -263,18 +291,30 @@ impl MusicImportProvider for HttpMusicImportProvider {
     }
 }
 
-pub(super) async fn execute_import<P: MusicImportProvider>(
+pub(super) async fn execute_import_with_progress<P, F, Fut>(
     provider: &P,
     import_id: Uuid,
     options: ImportOptions,
-) -> Result<ImportOutcome, ImportFailure> {
+    mut report_progress: F,
+) -> Result<(ImportOutcome, ImportProgress), ImportFailure>
+where
+    P: MusicImportProvider,
+    F: FnMut(ImportProgress) -> Fut,
+    Fut: Future<Output = ()>,
+{
     let mut outcome = ImportOutcome::default();
+    let mut progress = ImportProgress {
+        stage: "reading_spotify",
+        ..ImportProgress::default()
+    };
+    report_progress(progress.clone()).await;
     let spotify_user_id = provider
         .spotify_current_user_id()
         .await
         .map_err(|message| ImportFailure {
             message,
             outcome: outcome.clone(),
+            progress: progress.clone(),
         })?;
 
     let playlists = if options.include_owned_playlists || options.include_saved_playlists {
@@ -284,6 +324,7 @@ pub(super) async fn execute_import<P: MusicImportProvider>(
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
+                progress: progress.clone(),
             })?
             .into_iter()
             .filter(|playlist| {
@@ -301,11 +342,20 @@ pub(super) async fn execute_import<P: MusicImportProvider>(
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
+                progress: progress.clone(),
             })?
     } else {
         Vec::new()
     };
     outcome.total_items = (playlists.len() + artists.len()) as i32;
+    progress.playlist_total = playlists.len() as i32;
+    progress.artist_total = artists.len() as i32;
+    progress.stage = if playlists.is_empty() {
+        "matching_artists"
+    } else {
+        "creating_playlists"
+    };
+    report_progress(progress.clone()).await;
 
     for playlist in playlists {
         let visibility = if playlist.is_public {
@@ -323,21 +373,45 @@ pub(super) async fn execute_import<P: MusicImportProvider>(
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
+                progress: progress.clone(),
             })?;
         outcome.imported_items += 1;
+        progress.playlists_imported += 1;
+        report_progress(progress.clone()).await;
     }
 
+    progress.stage = "matching_artists";
+    report_progress(progress.clone()).await;
     let mut tidal_artist_ids = HashSet::new();
-    for artist in artists {
+    let artist_count = artists.len();
+    for (index, artist) in artists.iter().enumerate() {
         match provider.find_tidal_artist(&artist.name).await {
             Ok(Some(tidal_artist_id)) => {
                 tidal_artist_ids.insert(tidal_artist_id);
             }
-            Ok(None) => outcome.unmatched_items += 1,
-            Err(message) => return Err(ImportFailure { message, outcome }),
+            Ok(None) => {
+                outcome.unmatched_items += 1;
+                progress.artists_unmatched += 1;
+            }
+            Err(message) => {
+                return Err(ImportFailure {
+                    message,
+                    outcome,
+                    progress,
+                });
+            }
+        }
+        progress.artists_checked += 1;
+        if tidal_artist_ids.len() as i32 > progress.artists_matched {
+            progress.artists_matched = tidal_artist_ids.len() as i32;
+        }
+        if index % 10 == 9 || index + 1 == artist_count {
+            report_progress(progress.clone()).await;
         }
     }
     let tidal_artist_ids = tidal_artist_ids.into_iter().collect::<Vec<_>>();
+    progress.stage = "following_artists";
+    report_progress(progress.clone()).await;
     for (batch_index, artist_ids) in tidal_artist_ids.chunks(50).enumerate() {
         let result = provider
             .follow_tidal_artists(
@@ -348,11 +422,15 @@ pub(super) async fn execute_import<P: MusicImportProvider>(
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
+                progress: progress.clone(),
             })?;
         outcome.imported_items += result.imported_items;
         outcome.unmatched_items += result.unmatched_items;
+        progress.artists_followed += result.imported_items;
+        progress.artists_unmatched += result.unmatched_items;
+        report_progress(progress.clone()).await;
     }
-    Ok(outcome)
+    Ok((outcome, progress))
 }
 
 fn idempotency_key(import_id: Uuid, purpose: &str) -> String {
@@ -445,7 +523,7 @@ struct TidalSkippedArtist {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
 
@@ -528,7 +606,7 @@ mod tests {
             followed_artists: Mutex::new(Vec::new()),
         };
 
-        let outcome = execute_import(
+        let outcome = execute_import_with_progress(
             &provider,
             Uuid::nil(),
             ImportOptions {
@@ -536,9 +614,11 @@ mod tests {
                 include_saved_playlists: false,
                 include_followed_artists: true,
             },
+            |_| async {},
         )
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
         assert_eq!(outcome.total_items, 3);
         assert_eq!(outcome.imported_items, 3);
@@ -572,7 +652,7 @@ mod tests {
             followed_artists: Mutex::new(Vec::new()),
         };
 
-        let outcome = execute_import(
+        let outcome = execute_import_with_progress(
             &provider,
             Uuid::nil(),
             ImportOptions {
@@ -580,9 +660,11 @@ mod tests {
                 include_saved_playlists: true,
                 include_followed_artists: false,
             },
+            |_| async {},
         )
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
         assert_eq!(outcome.total_items, 1);
         assert_eq!(outcome.imported_items, 1);
@@ -592,9 +674,66 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reports_collection_specific_import_progress() {
+        let provider = FakeProvider {
+            playlists: vec![playlist("owned", "spotify-user", true)],
+            artists: vec![SpotifyArtist {
+                name: "The Artist".to_string(),
+            }],
+            matched_artist: Some("tidal-artist".to_string()),
+            created_playlists: Mutex::new(Vec::new()),
+            followed_artists: Mutex::new(Vec::new()),
+        };
+        let updates = Arc::new(Mutex::new(Vec::new()));
+
+        let (_, final_progress) = execute_import_with_progress(
+            &provider,
+            Uuid::nil(),
+            ImportOptions {
+                include_owned_playlists: true,
+                include_saved_playlists: false,
+                include_followed_artists: true,
+            },
+            {
+                let updates = Arc::clone(&updates);
+                move |progress| {
+                    let updates = Arc::clone(&updates);
+                    async move { updates.lock().unwrap().push(progress) }
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(updates.lock().unwrap().iter().any(|progress| {
+            progress.stage == "creating_playlists"
+                && progress.playlist_total == 1
+                && progress.artist_total == 1
+        }));
+        assert_eq!(final_progress.stage, "following_artists");
+        assert_eq!(final_progress.playlists_imported, 1);
+        assert_eq!(final_progress.artists_checked, 1);
+        assert_eq!(final_progress.artists_matched, 1);
+        assert_eq!(final_progress.artists_followed, 1);
+    }
+
     #[test]
     fn artist_name_matching_ignores_case_and_whitespace_only() {
         assert!(same_artist_name("The  Artist", " the artist "));
         assert!(!same_artist_name("Artist One", "Artist Two"));
+    }
+
+    #[test]
+    fn restarting_a_run_reuses_its_tidal_idempotency_key() {
+        let import_id = Uuid::new_v4();
+        assert_eq!(
+            idempotency_key(import_id, "playlist:spotify-playlist"),
+            idempotency_key(import_id, "playlist:spotify-playlist")
+        );
+        assert_ne!(
+            idempotency_key(import_id, "playlist:spotify-playlist"),
+            idempotency_key(Uuid::new_v4(), "playlist:spotify-playlist")
+        );
     }
 }
