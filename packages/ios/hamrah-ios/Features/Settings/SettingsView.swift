@@ -356,7 +356,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var musicSyncSection: some View {
         Section("Music Import") {
-            Text("Import Spotify playlists and followed artists into private TIDAL playlists.")
+            Text("Create matching empty TIDAL playlists and follow exact artist-name matches. Public Spotify playlists remain public; all others are unlisted. Tracks and playlist contents are not transferred.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
@@ -364,8 +364,15 @@ struct SettingsView: View {
                 HStack {
                     Label(provider.capitalized, systemImage: provider == "spotify" ? "music.note" : "waveform")
                     Spacer()
-                    if musicConnections.contains(where: { $0.provider == provider && $0.status == "connected" }) {
-                        Text("Connected").foregroundStyle(.green)
+                    if let connection = musicConnections.first(where: { $0.provider == provider && $0.status == "connected" }) {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("Connected").foregroundStyle(.green)
+                            if let accountId = connection.provider_account_id {
+                                Text(accountId).font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        Button("Reconnect") { Task { await connectMusic(provider: provider) } }
+                            .disabled(isLoadingMusic || !canAttemptServerSync)
                     } else {
                         Button("Connect") { Task { await connectMusic(provider: provider) } }
                             .disabled(isLoadingMusic || !canAttemptServerSync)
@@ -378,7 +385,7 @@ struct SettingsView: View {
                 .disabled(isLoadingMusic || !hasMusicConnections || !canAttemptServerSync)
 
             if let latestMusicImport {
-                Text("Latest import: \(latestMusicImport.status) · \(latestMusicImport.imported_items) imported · \(latestMusicImport.unmatched_items) unmatched")
+                Text("Latest import: \(latestMusicImport.status) · \(latestMusicImport.imported_items) created or followed · \(latestMusicImport.unmatched_items) unmatched")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
