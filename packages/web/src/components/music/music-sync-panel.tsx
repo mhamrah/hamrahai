@@ -1,31 +1,20 @@
-import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
+import { $, component$, useSignal } from "@builder.io/qwik";
 import type { MusicConnectionWire, MusicImportWire, MusicProvider } from "@hamrah/shared";
 import { createApiClient } from "~/lib/auth/api-client";
 
 const providers: MusicProvider[] = ["spotify", "tidal"];
 
-export const MusicSyncPanel = component$(() => {
-  const connections = useSignal<MusicConnectionWire[]>([]);
-  const imports = useSignal<MusicImportWire[]>([]);
-  const error = useSignal<string>();
-  const isLoading = useSignal(true);
+type MusicSyncPanelProps = {
+  initialConnections: MusicConnectionWire[];
+  initialImports: MusicImportWire[];
+  initialError?: string;
+};
+
+export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
+  const connections = useSignal(props.initialConnections);
+  const imports = useSignal(props.initialImports);
+  const error = useSignal<string | undefined>(props.initialError);
   const includeSaved = useSignal(false);
-
-  const load = $(async () => {
-    const client = createApiClient();
-    try {
-      [connections.value, imports.value] = await Promise.all([
-        client.get<MusicConnectionWire[]>("/v1/music/connections"),
-        client.get<MusicImportWire[]>("/v1/music/imports"),
-      ]);
-    } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : "Unable to load music sync.";
-    } finally {
-      isLoading.value = false;
-    }
-  });
-
-  useVisibleTask$(() => { void load(); });
 
   const connect = $(async (provider: MusicProvider) => {
     error.value = undefined;
@@ -75,7 +64,7 @@ export const MusicSyncPanel = component$(() => {
       <input type="checkbox" checked={includeSaved.value} onChange$={(event) => { includeSaved.value = (event.target as HTMLInputElement).checked; }} />
       Also import playlists saved in my Spotify library
     </label>
-    <button class="mt-4 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={isLoading.value || !connected("spotify") || !connected("tidal")} onClick$={startImport}>Start import</button>
+    <button class="mt-4 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={!connected("spotify") || !connected("tidal")} onClick$={startImport}>Start import</button>
     {imports.value[0] && <p class="mt-3 text-sm text-gray-600">Latest import: {imports.value[0].status} · {imports.value[0].imported_items} imported · {imports.value[0].unmatched_items} unmatched</p>}
   </section>;
 });
