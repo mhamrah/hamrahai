@@ -48,6 +48,18 @@ The import itself performs these steps:
 TIDAL write requests use an import-run-specific idempotency key. The database
 also permits only one queued or running import per Hamrah user.
 
+## Failures and restart safety
+
+If an import fails or completes partially, clients show a retry action. Retrying
+reuses the original import run and its TIDAL idempotency keys, rather than
+creating a second run. This safely replays incomplete work without creating a
+duplicate TIDAL playlist or artist relationship.
+
+The API updates a progress heartbeat whenever it persists import progress. A
+run that stops reporting for five minutes is marked failed with a restartable
+error. New imports are blocked while a failed or partial import is available,
+so a user must safely restart it before beginning another transfer.
+
 ## Required configuration
 
 The deployment workflow configures public runtime values. The API service also

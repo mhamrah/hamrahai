@@ -392,8 +392,9 @@ struct SettingsView: View {
             }
 
             Toggle("Also import saved Spotify playlists", isOn: $includeSavedMusicPlaylists)
-            Button(latestMusicImport?.isActive == true ? "Import in Progress" : "Start Import") {
-                Task { await startMusicImport() }
+                .disabled(latestMusicImport?.isActive == true || latestMusicImport?.canRestart == true)
+            Button(musicImportActionTitle) {
+                Task { await beginOrRestartMusicImport() }
             }
             .disabled(isLoadingMusic || latestMusicImport?.isActive == true || !hasMusicConnections || !canAttemptServerSync)
 
@@ -407,6 +408,13 @@ struct SettingsView: View {
         ["spotify", "tidal"].allSatisfy { provider in
             musicConnections.contains { $0.provider == provider && $0.status == "connected" }
         }
+    }
+
+    private var musicImportActionTitle: String {
+        if latestMusicImport?.isActive == true { return "Import in Progress" }
+        if latestMusicImport?.status == "failed" { return "Restart Failed Import" }
+        if latestMusicImport?.status == "partial" { return "Retry Partial Import" }
+        return "Start Import"
     }
 
     private func loadMusicConnections() async {
@@ -435,7 +443,19 @@ struct SettingsView: View {
         catch { errorMessage = "Failed to connect \(provider.capitalized): \(error.localizedDescription)" }
     }
 
-    private func startMusicImport() async {
+    private func beginOrRestartMusicImport() async {
+        if let latestMusicImport, latestMusicImport.canRestart {
+            await performMusicImport {
+                try await musicSyncAPI.restartImport(id: latestMusicImport.id)
+            }
+        } else {
+            await performMusicImport {
+                try await musicSyncAPI.startImport(includeSavedPlaylists: includeSavedMusicPlaylists)
+            }
+        }
+    }
+
+    private func performMusicImport(_ operation: () async throws -> MusicImportDTO) async {
         isLoadingMusic = true
         let statusTask = Task {
             try? await Task.sleep(for: .milliseconds(300))
@@ -449,12 +469,14 @@ struct SettingsView: View {
             isLoadingMusic = false
         }
         do {
-            let imported = try await musicSyncAPI.startImport(includeSavedPlaylists: includeSavedMusicPlaylists)
+            let imported = try await operation()
             musicImports = [imported] + musicImports.filter { $0.id != imported.id }
         } catch {
             await loadMusicImports(showErrorOnFailure: false)
             if latestMusicImport?.isActive == true {
                 infoMessage = "A music import is already running. Its live status is shown below."
+            } else if latestMusicImport?.canRestart == true {
+                infoMessage = "Restart the incomplete import to safely reuse its original TIDAL idempotency keys."
             } else {
                 errorMessage = "Failed to start music import: \(error.localizedDescription)"
             }
@@ -481,6 +503,11 @@ struct SettingsView: View {
             Text(musicImport.resultSummary)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+            if musicImport.canRestart {
+                Text("Restarting safely reuses this import's original TIDAL idempotency keys.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             if let error = musicImport.error {
                 Text(error)
                     .font(.footnote)

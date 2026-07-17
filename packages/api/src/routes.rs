@@ -249,6 +249,14 @@ async fn create_music_import_wrapper(
     music::create_import(axum::extract::State(pool), headers, json).await
 }
 
+async fn restart_music_import_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    path: axum::extract::Path<uuid::Uuid>,
+) -> Response {
+    music::restart_import(axum::extract::State(pool), headers, path).await
+}
+
 async fn list_music_imports_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
@@ -369,6 +377,10 @@ pub fn create_router(pool: DbPool) -> Router {
         .route(
             "/v1/music/imports",
             get(list_music_imports_wrapper).post(create_music_import_wrapper),
+        )
+        .route(
+            "/v1/music/imports/{id}/restart",
+            post(restart_music_import_wrapper),
         )
         .route("/v1/tags", get(list_tags_wrapper))
         .route(

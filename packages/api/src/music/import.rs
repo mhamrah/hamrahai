@@ -723,4 +723,17 @@ mod tests {
         assert!(same_artist_name("The  Artist", " the artist "));
         assert!(!same_artist_name("Artist One", "Artist Two"));
     }
+
+    #[test]
+    fn restarting_a_run_reuses_its_tidal_idempotency_key() {
+        let import_id = Uuid::new_v4();
+        assert_eq!(
+            idempotency_key(import_id, "playlist:spotify-playlist"),
+            idempotency_key(import_id, "playlist:spotify-playlist")
+        );
+        assert_ne!(
+            idempotency_key(import_id, "playlist:spotify-playlist"),
+            idempotency_key(Uuid::new_v4(), "playlist:spotify-playlist")
+        );
+    }
 }

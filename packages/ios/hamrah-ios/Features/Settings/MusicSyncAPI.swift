@@ -36,6 +36,7 @@ struct MusicImportDTO: Codable, Identifiable {
     let created_at: String
 
     var isActive: Bool { status == "queued" || status == "running" }
+    var canRestart: Bool { status == "failed" || status == "partial" }
 
     var sourceSummary: String {
         let playlists = "\(playlist_total) Spotify \(playlist_total == 1 ? "playlist" : "playlists")"
@@ -70,7 +71,7 @@ struct MusicImportDTO: Codable, Identifiable {
     }
 
     var resultSummary: String {
-        "\(playlists_imported) playlists created · \(artists_followed) artists followed · \(unmatched_items) unmatched"
+        "\(playlists_imported) playlist operations completed · \(artists_followed) artist follows completed · \(unmatched_items) unmatched"
     }
 }
 
@@ -99,6 +100,13 @@ struct MusicSyncAPI {
         try await client.post(
             "/v1/music/imports",
             body: MusicImportRequestDTO(include_owned_playlists: true, include_saved_playlists: includeSavedPlaylists, include_followed_artists: true),
+            auth: .required,
+            responseType: MusicImportDTO.self)
+    }
+
+    func restartImport(id: String) async throws -> MusicImportDTO {
+        try await client.post(
+            "/v1/music/imports/\(id)/restart",
             auth: .required,
             responseType: MusicImportDTO.self)
     }

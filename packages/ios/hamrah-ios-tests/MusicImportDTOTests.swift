@@ -32,7 +32,15 @@ struct MusicImportDTOTests {
         #expect(musicImport.stageProgress?.label == "5 of 8 exact matches followed")
     }
 
+    @Test
+    func failedAndPartialImportsCanBeRestarted() {
+        #expect(makeImport(status: "failed", stage: "failed").canRestart)
+        #expect(makeImport(status: "partial", stage: "completed").canRestart)
+        #expect(!makeImport(status: "completed", stage: "completed").canRestart)
+    }
+
     private func makeImport(
+        status: String = "running",
         stage: String,
         playlistTotal: Int = 0,
         artistTotal: Int = 0,
@@ -42,7 +50,7 @@ struct MusicImportDTOTests {
     ) -> MusicImportDTO {
         MusicImportDTO(
             id: "import-1",
-            status: "running",
+            status: status,
             include_owned_playlists: true,
             include_saved_playlists: false,
             include_followed_artists: true,

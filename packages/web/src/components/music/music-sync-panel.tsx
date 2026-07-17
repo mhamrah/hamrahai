@@ -11,6 +11,9 @@ const providers: MusicProvider[] = ["spotify", "tidal"];
 const isActiveImport = (run: MusicImportWire) =>
   run.status === "queued" || run.status === "running";
 
+const canRestartImport = (run: MusicImportWire) =>
+  run.status === "failed" || run.status === "partial";
+
 const importStage = (run: MusicImportWire) => {
   switch (run.stage) {
     case "queued":
@@ -105,11 +108,44 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
           await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
         imports.value = currentImports;
         if (currentImports[0] && isActiveImport(currentImports[0])) return;
+        if (currentImports[0] && canRestartImport(currentImports[0])) {
+          error.value =
+            "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.";
+          return;
+        }
       } catch {
         // Show the original start error when the status refresh also fails.
       }
       error.value =
         cause instanceof Error ? cause.message : "Unable to start import.";
+    } finally {
+      window.clearInterval(refreshTimer);
+      isImporting.value = false;
+    }
+  });
+
+  const restartImport = $(async (importId: string) => {
+    error.value = undefined;
+    isImporting.value = true;
+    const refreshTimer = window.setInterval(async () => {
+      try {
+        imports.value =
+          await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
+      } catch {
+        // The completed request will still surface its result or error below.
+      }
+    }, 500);
+    try {
+      const run = await createApiClient().post<MusicImportWire>(
+        `/v1/music/imports/${importId}/restart`,
+      );
+      imports.value = [
+        run,
+        ...imports.value.filter((item) => item.id !== run.id),
+      ];
+    } catch (cause) {
+      error.value =
+        cause instanceof Error ? cause.message : "Unable to restart import.";
     } finally {
       window.clearInterval(refreshTimer);
       isImporting.value = false;
@@ -177,6 +213,11 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         <input
           type="checkbox"
           checked={includeSaved.value}
+          disabled={Boolean(
+            imports.value[0] &&
+            (isActiveImport(imports.value[0]) ||
+              canRestartImport(imports.value[0])),
+          )}
           onChange$={(event) => {
             includeSaved.value = (event.target as HTMLInputElement).checked;
           }}
@@ -191,13 +232,22 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
           !connected("spotify") ||
           !connected("tidal")
         }
-        onClick$={startImport}
+        onClick$={() => {
+          const latestImport = imports.value.at(0);
+          return latestImport && canRestartImport(latestImport)
+            ? restartImport(latestImport.id)
+            : startImport();
+        }}
       >
         {isImporting.value
           ? "Importing…"
           : imports.value[0] && isActiveImport(imports.value[0])
             ? "Import in progress"
-            : "Start import"}
+            : imports.value[0]?.status === "failed"
+              ? "Restart failed import"
+              : imports.value[0]?.status === "partial"
+                ? "Retry partial import"
+                : "Start import"}
       </button>
       {imports.value[0] && (
         <div class="mt-3 rounded-md bg-gray-50 p-3 text-sm text-gray-600">
@@ -213,6 +263,11 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
             {imports.value[0].artists_followed} artists followed ·{" "}
             {imports.value[0].unmatched_items} unmatched
           </p>
+          {canRestartImport(imports.value[0]) && (
+            <p class="mt-1">
+              Restarting reuses this import's original TIDAL idempotency keys.
+            </p>
+          )}
           {imports.value[0].error && (
             <p class="mt-1 text-red-700">{imports.value[0].error}</p>
           )}
