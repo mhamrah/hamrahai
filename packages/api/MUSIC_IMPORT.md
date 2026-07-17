@@ -23,14 +23,27 @@ Hamrah provides a one-way, user-authorized import from Spotify to TIDAL.
 and import-run persistence. `src/music/import.rs` owns provider requests and
 the deterministic transfer behavior.
 
-`POST /v1/music/imports` performs one bounded import request synchronously:
+`POST /v1/music/imports` performs one bounded import request synchronously.
+While it runs, `GET /v1/music/imports` exposes the active run's stage and
+collection-specific counts, so clients can show what is selected and its live
+progress:
+
+- selected Spotify playlists and followed artists;
+- TIDAL playlists created;
+- Spotify artists checked for an exact TIDAL match; and
+- exact matches successfully followed.
+
+The stages are `preparing`, `reading_spotify`, `creating_playlists`,
+`matching_artists`, and `following_artists`, followed by a terminal status.
+
+The import itself performs these steps:
 
 1. Load or refresh each encrypted provider token.
 2. Read the selected Spotify playlist metadata and followed artists.
 3. Create empty TIDAL playlists with the source visibility mapping.
 4. Search TIDAL for exact artist-name matches and follow matches in batches of
    at most 50.
-5. Persist a completed, partial, or failed `music_import_runs` row.
+5. Persist progress and a completed, partial, or failed `music_import_runs` row.
 
 TIDAL write requests use an import-run-specific idempotency key. The database
 also permits only one queued or running import per Hamrah user.
@@ -77,4 +90,4 @@ Use an allowlisted Spotify development-mode account and a TIDAL test account.
 This is an import, not a recurring sync. It does not transfer tracks, delete
 destination data, export TIDAL data, make heuristic artist matches, or run a
 background job. If imports outgrow the request timeout, add a durable job
-runner with per-item persistence before increasing scope.
+runner that preserves the same per-collection progress before increasing scope.

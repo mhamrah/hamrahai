@@ -95,9 +95,19 @@ fn default_true() -> bool {
 pub struct MusicImportResponse {
     pub id: Uuid,
     pub status: String,
+    pub include_owned_playlists: bool,
+    pub include_saved_playlists: bool,
+    pub include_followed_artists: bool,
+    pub stage: String,
     pub total_items: i32,
     pub imported_items: i32,
     pub unmatched_items: i32,
+    pub playlist_total: i32,
+    pub playlists_imported: i32,
+    pub artist_total: i32,
+    pub artists_checked: i32,
+    pub artists_matched: i32,
+    pub artists_followed: i32,
     pub error: Option<String>,
     pub created_at: chrono::DateTime<Utc>,
 }
@@ -548,6 +558,30 @@ async fn access_token_for_import(
     Ok(refreshed.access_token)
 }
 
+async fn persist_import_progress(
+    pool: &DbPool,
+    import_id: Uuid,
+    progress: &import::ImportProgress,
+) {
+    if let Err(err) = sqlx::query("UPDATE music_import_runs SET stage = $1, total_items = $2, imported_items = $3, unmatched_items = $4, playlist_total = $5, playlists_imported = $6, artist_total = $7, artists_checked = $8, artists_matched = $9, artists_followed = $10 WHERE id = $11")
+        .bind(progress.stage)
+        .bind(progress.playlist_total + progress.artist_total)
+        .bind(progress.playlists_imported + progress.artists_followed)
+        .bind(progress.artists_unmatched)
+        .bind(progress.playlist_total)
+        .bind(progress.playlists_imported)
+        .bind(progress.artist_total)
+        .bind(progress.artists_checked)
+        .bind(progress.artists_matched)
+        .bind(progress.artists_followed)
+        .bind(import_id)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(%err, %import_id, "persist music import progress");
+    }
+}
+
 pub async fn create_import(
     State(pool): State<DbPool>,
     headers: HeaderMap,
@@ -574,28 +608,32 @@ pub async fn create_import(
         );
     }
     let id = Uuid::new_v4();
-    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,status,started_at) VALUES ($1,$2,$3,$4,$5,'running',NOW())")
+    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,status,stage,started_at) VALUES ($1,$2,$3,$4,$5,'running','preparing',NOW())")
         .bind(id).bind(claims.sub).bind(request.include_owned_playlists).bind(request.include_saved_playlists).bind(request.include_followed_artists).execute(&pool).await {
         tracing::error!(%err, "create music import");
         return error(StatusCode::CONFLICT, "another music import is already running");
     }
 
+    let initial_progress = import::ImportProgress::default();
+    persist_import_progress(&pool, id, &initial_progress).await;
     let result = async {
         let spotify_access_token = access_token_for_import(&pool, claims.sub, "spotify")
             .await
             .map_err(|message| import::ImportFailure {
                 message,
                 outcome: import::ImportOutcome::default(),
+                progress: initial_progress.clone(),
             })?;
         let tidal_access_token = access_token_for_import(&pool, claims.sub, "tidal")
             .await
             .map_err(|message| import::ImportFailure {
                 message,
                 outcome: import::ImportOutcome::default(),
+                progress: initial_progress.clone(),
             })?;
         let provider =
             import::HttpMusicImportProvider::new(spotify_access_token, tidal_access_token);
-        import::execute_import(
+        import::execute_import_with_progress(
             &provider,
             id,
             import::ImportOptions {
@@ -603,19 +641,26 @@ pub async fn create_import(
                 include_saved_playlists: request.include_saved_playlists,
                 include_followed_artists: request.include_followed_artists,
             },
+            |progress| {
+                let pool = pool.clone();
+                async move { persist_import_progress(&pool, id, &progress).await }
+            },
         )
         .await
     }
     .await;
 
-    let (status, outcome, import_error) = match result {
-        Ok(outcome) if outcome.unmatched_items == 0 => ("completed", outcome, None),
-        Ok(outcome) => ("partial", outcome, None),
+    let (status, outcome, mut progress, import_error) = match result {
+        Ok((outcome, progress)) if outcome.unmatched_items == 0 => {
+            ("completed", outcome, progress, None)
+        }
+        Ok((outcome, progress)) => ("partial", outcome, progress, None),
         Err(failure) => {
             tracing::warn!(error = %failure.message, "music import failed");
             (
                 "failed",
                 failure.outcome,
+                failure.progress,
                 Some(
                     "could not complete music import; reconnect both providers and try again"
                         .to_string(),
@@ -623,8 +668,13 @@ pub async fn create_import(
             )
         }
     };
-    match sqlx::query_as::<_, MusicImportResponse>("UPDATE music_import_runs SET status = $1, total_items = $2, imported_items = $3, unmatched_items = $4, error = $5, completed_at = NOW() WHERE id = $6 RETURNING id,status,total_items,imported_items,unmatched_items,error,created_at")
-        .bind(status).bind(outcome.total_items).bind(outcome.imported_items).bind(outcome.unmatched_items).bind(import_error).bind(id).fetch_one(&pool).await {
+    progress.stage = if status == "failed" {
+        "failed"
+    } else {
+        "completed"
+    };
+    match sqlx::query_as::<_, MusicImportResponse>("UPDATE music_import_runs SET status = $1, stage = $2, total_items = $3, imported_items = $4, unmatched_items = $5, playlist_total = $6, playlists_imported = $7, artist_total = $8, artists_checked = $9, artists_matched = $10, artists_followed = $11, error = $12, completed_at = NOW() WHERE id = $13 RETURNING id,status,include_owned_playlists,include_saved_playlists,include_followed_artists,stage,total_items,imported_items,unmatched_items,playlist_total,playlists_imported,artist_total,artists_checked,artists_matched,artists_followed,error,created_at")
+        .bind(status).bind(progress.stage).bind(outcome.total_items).bind(outcome.imported_items).bind(outcome.unmatched_items).bind(progress.playlist_total).bind(progress.playlists_imported).bind(progress.artist_total).bind(progress.artists_checked).bind(progress.artists_matched).bind(progress.artists_followed).bind(import_error).bind(id).fetch_one(&pool).await {
         Ok(row) => (StatusCode::CREATED, Json(row)).into_response(),
         Err(err) => { tracing::error!(%err, "complete music import"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not complete music import") }
     }
@@ -635,7 +685,7 @@ pub async fn list_imports(State(pool): State<DbPool>, headers: HeaderMap) -> Res
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match sqlx::query_as::<_, MusicImportResponse>("SELECT id,status,total_items,imported_items,unmatched_items,error,created_at FROM music_import_runs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20").bind(claims.sub).fetch_all(&pool).await {
+    match sqlx::query_as::<_, MusicImportResponse>("SELECT id,status,include_owned_playlists,include_saved_playlists,include_followed_artists,stage,total_items,imported_items,unmatched_items,playlist_total,playlists_imported,artist_total,artists_checked,artists_matched,artists_followed,error,created_at FROM music_import_runs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20").bind(claims.sub).fetch_all(&pool).await {
         Ok(rows) => Json(rows).into_response(), Err(err) => { tracing::error!(%err, "list music imports"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not load music imports") }
     }
 }

@@ -209,9 +209,27 @@ export interface MusicImportRequestWire {
 export interface MusicImportWire {
   id: string;
   status: "queued" | "running" | "completed" | "partial" | "failed";
+  include_owned_playlists: boolean;
+  include_saved_playlists: boolean;
+  include_followed_artists: boolean;
+  stage:
+    | "queued"
+    | "preparing"
+    | "reading_spotify"
+    | "creating_playlists"
+    | "matching_artists"
+    | "following_artists"
+    | "completed"
+    | "failed";
   total_items: number;
   imported_items: number;
   unmatched_items: number;
+  playlist_total: number;
+  playlists_imported: number;
+  artist_total: number;
+  artists_checked: number;
+  artists_matched: number;
+  artists_followed: number;
   error?: string | null;
   created_at: string;
 }
