@@ -732,10 +732,14 @@ pub async fn create_import(
         );
     }
     let id = Uuid::new_v4();
-    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,status,stage,started_at) VALUES ($1,$2,$3,$4,$5,'running','preparing',NOW())")
+    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,include_owned_playlists,include_saved_playlists,include_followed_artists,status,stage,started_at) VALUES ($1,$2,'spotify','tidal',$3,$4,$5,'running','preparing',NOW())")
         .bind(id).bind(claims.sub).bind(request.include_owned_playlists).bind(request.include_saved_playlists).bind(request.include_followed_artists).execute(&pool).await {
         tracing::error!(%err, "create music import");
-        return error(StatusCode::CONFLICT, "another music import is already running");
+        return if err.as_database_error().is_some_and(|database_error| database_error.is_unique_violation()) {
+            error(StatusCode::CONFLICT, "another music import is already running")
+        } else {
+            error(StatusCode::INTERNAL_SERVER_ERROR, "could not create music import")
+        };
     }
     run_import(
         &pool,

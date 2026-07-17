@@ -73,6 +73,10 @@ struct MusicImportDTO: Codable, Identifiable {
     var resultSummary: String {
         "\(playlists_imported) playlist operations completed · \(artists_followed) artist follows completed · \(unmatched_items) unmatched"
     }
+
+    var transferSummary: String {
+        "\(imported_items) of \(total_items) selected items transferred"
+    }
 }
 
 struct MusicAuthorizationDTO: Codable { let authorization_url: String }

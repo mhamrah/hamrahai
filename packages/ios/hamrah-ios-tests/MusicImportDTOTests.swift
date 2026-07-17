@@ -33,6 +33,18 @@ struct MusicImportDTOTests {
     }
 
     @Test
+    func transferSummaryShowsTransferredItemsOutOfTheSelectedTotal() {
+        let musicImport = makeImport(
+            stage: "creating_playlists",
+            playlistTotal: 3,
+            playlistsImported: 2,
+            artistTotal: 12
+        )
+
+        #expect(musicImport.transferSummary == "2 of 15 selected items transferred")
+    }
+
+    @Test
     func failedAndPartialImportsCanBeRestarted() {
         #expect(makeImport(status: "failed", stage: "failed").canRestart)
         #expect(makeImport(status: "partial", stage: "completed").canRestart)
@@ -43,6 +55,7 @@ struct MusicImportDTOTests {
         status: String = "running",
         stage: String,
         playlistTotal: Int = 0,
+        playlistsImported: Int = 0,
         artistTotal: Int = 0,
         artistsChecked: Int = 0,
         artistsMatched: Int = 0,
@@ -56,10 +69,10 @@ struct MusicImportDTOTests {
             include_followed_artists: true,
             stage: stage,
             total_items: playlistTotal + artistTotal,
-            imported_items: artistsFollowed,
+            imported_items: playlistsImported + artistsFollowed,
             unmatched_items: 0,
             playlist_total: playlistTotal,
-            playlists_imported: 0,
+            playlists_imported: playlistsImported,
             artist_total: artistTotal,
             artists_checked: artistsChecked,
             artists_matched: artistsMatched,

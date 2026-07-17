@@ -366,7 +366,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var musicSyncSection: some View {
-        Section("Music Import") {
+        Section("Music Import & Status") {
             Text("Create matching empty TIDAL playlists and follow exact artist-name matches. Public Spotify playlists remain public; all others are unlisted. Tracks and playlist contents are not transferred.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -488,6 +488,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Latest import · \(musicImport.stageDescription)")
                 .font(.footnote.weight(.medium))
+            if musicImport.isActive {
+                Label("Import in progress", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.footnote)
+                    .foregroundStyle(.blue)
+            }
             Text(musicImport.sourceSummary)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -501,6 +506,9 @@ struct SettingsView: View {
                     .controlSize(.small)
             }
             Text(musicImport.resultSummary)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text(musicImport.transferSummary)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             if musicImport.canRestart {
