@@ -17,6 +17,7 @@ const TIDAL_API_BASE: &str = "https://openapi.tidal.com/v2";
 const TIDAL_MEDIA_TYPE: &str = "application/vnd.api+json";
 const TIDAL_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const TIDAL_RATE_LIMIT_RETRIES: u8 = 3;
+const TIDAL_ISRC_FILTER_LIMIT: usize = 20;
 const INACCESSIBLE_SPOTIFY_PLAYLIST_WARNING: &str = "Some Spotify playlists could not be read. Check that you own or collaborate on them, then restart to retry safely.";
 
 static TIDAL_NEXT_REQUEST_AT: OnceLock<Mutex<Instant>> = OnceLock::new();
@@ -479,21 +480,21 @@ impl MusicImportProvider for HttpMusicImportProvider {
         if isrcs.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut url = reqwest::Url::parse(&format!("{}/tracks", self.tidal_api_base))
-            .map_err(|error| error.to_string())?;
-        url.query_pairs_mut()
-            .extend_pairs(isrcs.iter().map(|isrc| ("filter[isrc]", isrc)));
-        let response: TidalTracksResponse = self.tidal_get(url.to_string()).await?;
-        Ok(response
-            .data
-            .into_iter()
-            .filter_map(|track| {
+        let mut matches = HashMap::new();
+        for isrcs in isrcs.chunks(TIDAL_ISRC_FILTER_LIMIT) {
+            let mut url = reqwest::Url::parse(&format!("{}/tracks", self.tidal_api_base))
+                .map_err(|error| error.to_string())?;
+            url.query_pairs_mut()
+                .extend_pairs(isrcs.iter().map(|isrc| ("filter[isrc]", isrc)));
+            let response: TidalTracksResponse = self.tidal_get(url.to_string()).await?;
+            matches.extend(response.data.into_iter().filter_map(|track| {
                 track
                     .attributes
                     .isrc
                     .map(|isrc| (normalize_isrc(&isrc), track.id))
-            })
-            .collect())
+            }));
+        }
+        Ok(matches)
     }
 
     async fn add_tidal_playlist_tracks(
@@ -1692,6 +1693,50 @@ mod tests {
                 ("US-BBB-02".to_string(), "tidal-b".to_string()),
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn splits_isrc_lookups_at_tidal_filter_limit() {
+        let queries = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().route(
+            "/tracks",
+            get({
+                let queries = Arc::clone(&queries);
+                move |uri: Uri| {
+                    let queries = Arc::clone(&queries);
+                    async move {
+                        queries
+                            .lock()
+                            .unwrap()
+                            .push(uri.query().unwrap_or_default().to_string());
+                        (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                            r#"{"data":[]}"#,
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+        let isrcs = (0..=TIDAL_ISRC_FILTER_LIMIT)
+            .map(|index| format!("US-TEST-{index:02}"))
+            .collect::<Vec<_>>();
+
+        provider.tidal_tracks_by_isrc(&isrcs).await.unwrap();
+
+        server.abort();
+        let queries = queries.lock().unwrap();
+        assert_eq!(queries.len(), 2);
+        assert_eq!(
+            queries[0].matches("filter%5Bisrc%5D=").count(),
+            TIDAL_ISRC_FILTER_LIMIT
+        );
+        assert_eq!(queries[1].matches("filter%5Bisrc%5D=").count(), 1);
     }
 
     #[tokio::test]
