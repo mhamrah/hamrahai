@@ -78,6 +78,7 @@ export interface NativeAuthRequest {
   provider_id?: string;
   auth_method?: string;
   platform?: "web" | "ios" | "android" | "api";
+  link_provider?: "true";
   email_verified_at?: string;
 }
 

@@ -167,7 +167,7 @@ export default component$(() => {
                   </div>
                   {!providers.has("google") && (
                     <a
-                      href="/auth/google?redirect=%2Fsettings"
+                      href="/auth/google?redirect=%2Fsettings&link_provider=true"
                       class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
                     >
                       Connect
@@ -205,7 +205,7 @@ export default component$(() => {
                   </div>
                   {!providers.has("apple") && (
                     <a
-                      href="/auth/apple?redirect=%2Fsettings"
+                      href="/auth/apple?redirect=%2Fsettings&link_provider=true"
                       class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
                     >
                       Connect

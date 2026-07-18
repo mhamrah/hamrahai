@@ -846,8 +846,8 @@ async fn http_native_provider_link_requires_an_authenticated_session() -> anyhow
 }
 
 #[tokio::test]
-async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow::Result<()> {
-    let Some((_pool, router)) = setup_router().await? else {
+async fn http_native_oauth_links_new_provider_to_authenticated_web_user() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
         return Ok(());
     };
 
@@ -876,12 +876,14 @@ async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow:
         .await
         .unwrap();
     let apple_parsed: serde_json::Value = serde_json::from_slice(&apple_body).unwrap();
-    let access_token = apple_parsed["access_token"].as_str().unwrap();
     let user_id = apple_parsed["user"]["id"].as_str().unwrap().to_string();
+    let raw_session = Uuid::new_v4().to_string();
+    let csrf_token = Uuid::new_v4().to_string();
+    create_session(&pool, Uuid::parse_str(&user_id)?, &raw_session, 6).await?;
 
     let google_payload = json!({
         "provider": "google",
-        "platform": "ios",
+        "platform": "web",
         "id_token": format!("test-google:{google_email}"),
         "link_provider": "true"
     });
@@ -889,7 +891,11 @@ async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow:
         .method("POST")
         .uri("/api/auth/native")
         .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {access_token}"))
+        .header(
+            "cookie",
+            format!("session={raw_session}; csrf_token={csrf_token}"),
+        )
+        .header("x-csrf-token", csrf_token)
         .body(Body::from(google_payload.to_string()))
         .unwrap();
     let google_resp = router.clone().oneshot(google_req).await.unwrap();

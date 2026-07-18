@@ -37,6 +37,12 @@ describe("OAuth Provider Token Verification", () => {
     });
   });
 
+  it("marks a Google OAuth response as a provider-linking operation", () => {
+    expect(
+      buildGoogleNativeAuthRequest("signed-google-id-token", true),
+    ).toMatchObject({ link_provider: "true" });
+  });
+
   it("passes the Apple ID token to the API authentication boundary", () => {
     expect(buildAppleNativeAuthRequest("signed-apple-id-token")).toEqual({
       provider: "apple",
@@ -44,6 +50,12 @@ describe("OAuth Provider Token Verification", () => {
       auth_method: "apple",
       platform: "web",
     });
+  });
+
+  it("marks an Apple OAuth response as a provider-linking operation", () => {
+    expect(
+      buildAppleNativeAuthRequest("signed-apple-id-token", true),
+    ).toMatchObject({ link_provider: "true" });
   });
 
   describe("verifyGoogleToken", () => {

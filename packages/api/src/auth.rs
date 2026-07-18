@@ -209,7 +209,11 @@ pub async fn auth_native(
         .as_deref()
         .or(Some(provider.as_str()))
         .unwrap_or("oauth");
-    let current_user = current_bearer_user(&pool, &headers).await;
+    let current_user = if req.link_provider.as_deref() == Some("true") {
+        current_session_or_bearer_user(&pool, &headers).await
+    } else {
+        None
+    };
     if req.link_provider.as_deref() == Some("true") && current_user.is_none() {
         return (
             StatusCode::UNAUTHORIZED,
@@ -281,8 +285,8 @@ enum ResolveNativeUserError {
     Database,
 }
 
-async fn current_bearer_user(pool: &DbPool, headers: &HeaderMap) -> Option<User> {
-    let claims = require_claims(headers).ok()?;
+async fn current_session_or_bearer_user(pool: &DbPool, headers: &HeaderMap) -> Option<User> {
+    let claims = require_session_or_claims(pool, headers).await.ok()?;
     crate::db::get_user_by_id(pool, claims.sub)
         .await
         .ok()
