@@ -699,6 +699,13 @@ pub async fn reject_invalid_request_headers(
     pool: &DbPool,
     headers: &HeaderMap,
 ) -> Option<Response> {
+    // App Attest is a native bearer-token protection. Browser clients authenticate
+    // with the shared session cookie, which is protected by the CSRF middleware.
+    // Do not require an iOS-only key from those requests.
+    if !has_bearer_token(headers) {
+        return None;
+    }
+
     match verify_request_headers_if_present(pool, headers).await {
         Ok(()) => None,
         Err(error) => Some(
@@ -712,6 +719,10 @@ pub async fn reject_invalid_request_headers(
                 .into_response(),
         ),
     }
+}
+
+fn has_bearer_token(headers: &HeaderMap) -> bool {
+    header_str(headers, "authorization").is_some_and(|value| value.starts_with("Bearer "))
 }
 
 async fn verify_request_headers_if_present(

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::auth::require_claims;
+use crate::auth::require_session_or_claims;
 use crate::db::DbPool;
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -103,7 +103,7 @@ pub async fn list_links_with_query(
     headers: HeaderMap,
     Query(query): Query<ListLinksQuery>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(c) => c,
         Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -141,7 +141,7 @@ pub async fn create_link(
     headers: HeaderMap,
     Json(req): Json<CreateLinkRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(c) => c,
         Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -180,7 +180,7 @@ pub async fn update_link(
     Path(link_id): Path<Uuid>,
     Json(req): Json<UpdateLinkRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(c) => c,
         Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -238,7 +238,7 @@ pub async fn delete_link(
     headers: HeaderMap,
     Path(link_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers) {
+    let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(c) => c,
         Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
     };

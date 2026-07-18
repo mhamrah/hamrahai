@@ -7,7 +7,7 @@ use axum::{
 };
 use base64::Engine;
 use hamrah_server::{
-    db::{DbPool, init_pool, run_migrations},
+    db::{DbPool, create_session, init_pool, run_migrations, upsert_user},
     routes::create_router,
 };
 use serde::Deserialize;
@@ -246,6 +246,36 @@ async fn protected_native_link_routes_reject_missing_attestation_headers() -> an
     let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let parsed: ErrorResponse = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(parsed.error.as_deref(), Some("Missing App Attest key"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_link_routes_accept_a_valid_session_without_app_attestation() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+    let user = upsert_user(
+        &pool,
+        &format!("web-links-{}@example.com", Uuid::new_v4()),
+        Some("Web Links Test"),
+    )
+    .await?;
+    let session_token = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &session_token, 6).await?;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/links?since=&limit=100")
+        .header("cookie", format!("session={session_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await?;
+    let links: LinkDeltaResponse = serde_json::from_slice(&body_bytes)?;
+    assert!(links.links.is_empty());
 
     Ok(())
 }
