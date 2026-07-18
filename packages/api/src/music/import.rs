@@ -366,32 +366,91 @@ impl HttpMusicImportProvider {
     }
 }
 
+fn provider_error_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|value| match value {
+        serde_json::Value::String(value) => Some(value.chars().take(512).collect()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn provider_error_diagnostic(body: &str) -> (Option<String>, String) {
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(body) else {
+        let response = body
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(512)
+            .collect::<String>();
+        return (
+            None,
+            if response.is_empty() {
+                "empty response body".to_string()
+            } else {
+                format!("unstructured response: {response}")
+            },
+        );
+    };
+    let error = document
+        .get("errors")
+        .and_then(|errors| errors.as_array())
+        .and_then(|errors| errors.first())
+        .unwrap_or(&document);
+    let code = provider_error_field(error, "code");
+    let detail = ["detail", "message", "error_description", "error", "title"]
+        .iter()
+        .find_map(|key| provider_error_field(error, key));
+    let status = provider_error_field(error, "status");
+    let public_detail = match (&code, &detail) {
+        (Some(code), Some(detail)) => Some(format!("{code}: {detail}")),
+        (Some(code), None) => Some(code.clone()),
+        (None, Some(detail)) => Some(detail.clone()),
+        (None, None) => None,
+    };
+    let diagnostic = [
+        code.map(|value| format!("code={value}")),
+        status.map(|value| format!("status={value}")),
+        detail.map(|value| format!("detail={value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ");
+    (
+        public_detail,
+        if diagnostic.is_empty() {
+            "JSON response without recognized error fields".to_string()
+        } else {
+            diagnostic
+        },
+    )
+}
+
 async fn provider_http_error(provider: &str, response: Response) -> String {
     let status = response.status();
     let path = response.url().path().to_string();
-    let detail = response
-        .text()
-        .await
-        .ok()
-        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
-        .and_then(|body| {
-            body.get("errors")
-                .and_then(|errors| errors.as_array())
-                .and_then(|errors| errors.first())
-                .and_then(|error| {
-                    let code = error.get("code").and_then(|value| value.as_str());
-                    let detail = error
-                        .get("detail")
-                        .or_else(|| error.get("message"))
-                        .and_then(|value| value.as_str());
-                    match (code, detail) {
-                        (Some(code), Some(detail)) => Some(format!("{code}: {detail}")),
-                        (Some(code), None) => Some(code.to_string()),
-                        (None, Some(detail)) => Some(detail.to_string()),
-                        (None, None) => None,
-                    }
-                })
-        });
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_string();
+    let request_id = ["x-request-id", "x-correlation-id", "x-amzn-requestid"]
+        .iter()
+        .find_map(|header| response.headers().get(*header))
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_string();
+    let body = response.text().await.unwrap_or_default();
+    let (detail, diagnostic) = provider_error_diagnostic(&body);
+    tracing::warn!(
+        provider,
+        %status,
+        endpoint = %path,
+        %content_type,
+        %request_id,
+        provider_error = %diagnostic,
+        "music provider API request failed"
+    );
     match detail {
         Some(detail) => format!("{provider} returned {status} for {path}: {detail}"),
         None => format!("{provider} returned {status} for {path}"),
@@ -1867,5 +1926,21 @@ mod tests {
             "TIDAL returned 400 Bad Request for /tracks: VALIDATION_ERROR: filter[isrc] must use repeated values"
         );
         assert!(!error.contains("SECRET-ISRC"));
+    }
+
+    #[test]
+    fn provider_error_diagnostic_keeps_structured_tidal_error_fields() {
+        let (detail, diagnostic) = provider_error_diagnostic(
+            r#"{"errors":[{"code":"MISSING_SCOPE","status":"403","detail":"playlists.write is required"}]}"#,
+        );
+
+        assert_eq!(
+            detail.as_deref(),
+            Some("MISSING_SCOPE: playlists.write is required")
+        );
+        assert_eq!(
+            diagnostic,
+            "code=MISSING_SCOPE status=403 detail=playlists.write is required"
+        );
     }
 }
