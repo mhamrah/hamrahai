@@ -1,0 +1,18 @@
+[
+  {
+    "name": "delete-unretained-hamrah-api-versions",
+    "action": { "type": "Delete" },
+    "condition": {
+      "packageNamePrefixes": ["hamrah-api"],
+      "tagState": "any"
+    }
+  },
+  {
+    "name": "keep-two-complete-hamrah-api-builds",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": {
+      "packageNamePrefixes": ["hamrah-api"],
+      "keepCount": 6
+    }
+  }
+]

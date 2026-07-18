@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  api-docker-planner:
+  api-container-build:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -24,11 +24,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.0
 
-      - name: Validate Cargo Chef planner
+      - name: Build production container
         uses: docker/build-push-action@v7
         with:
           context: packages/api
-          target: planner
           push: false
 
   api-tests:
