@@ -186,7 +186,7 @@ struct SettingsView: View {
 
                 if !isAuthProviderLinked("apple", for: user) {
                     Button(action: {
-                        Task { await authManager.signInWithApple() }
+                        Task { await authManager.signInWithApple(linkProvider: true) }
                     }) {
                         HStack {
                             Image(systemName: "applelogo")
@@ -379,12 +379,24 @@ struct SettingsView: View {
                     if let connection = musicConnections.first(where: { $0.provider == provider && $0.status == "connected" }) {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text("Connected").foregroundStyle(.green)
+                            if let accountName = connection.provider_account_name {
+                                Text(accountName).font(.caption).fontWeight(.medium)
+                            }
                             if let accountId = connection.provider_account_id {
-                                Text(accountId).font(.caption2).foregroundStyle(.secondary)
+                                Text("\(provider == "spotify" ? "Spotify" : "TIDAL") ID: \(accountId)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        Button("Reconnect") { Task { await connectMusic(provider: provider) } }
-                            .disabled(isLoadingMusic || !canAttemptServerSync)
+                        Menu("Manage") {
+                            Button("Change Account") {
+                                Task { await connectMusic(provider: provider) }
+                            }
+                            Button("Disconnect", role: .destructive) {
+                                Task { await disconnectMusic(provider: provider) }
+                            }
+                        }
+                        .disabled(isLoadingMusic || !canAttemptServerSync)
                     } else {
                         Button("Connect") { Task { await connectMusic(provider: provider) } }
                             .disabled(isLoadingMusic || !canAttemptServerSync)
@@ -393,9 +405,9 @@ struct SettingsView: View {
             }
 
             Toggle("Also import saved Spotify playlists", isOn: $includeSavedMusicPlaylists)
-                .disabled(latestMusicImport?.isActive == true || latestMusicImport?.canRestart == true)
+                .disabled(latestMusicImport?.importOptionsAreEditable == false)
             Toggle("Also import Spotify Liked Songs", isOn: $includeSavedMusicTracks)
-                .disabled(latestMusicImport?.isActive == true || latestMusicImport?.canRestart == true)
+                .disabled(latestMusicImport?.importOptionsAreEditable == false)
             if includeSavedMusicTracks {
                 Text("Spotify will ask for permission to read your Liked Songs. Reconnect Spotify if requested.")
                     .font(.caption)
@@ -419,6 +431,9 @@ struct SettingsView: View {
     }
 
     private var musicImportActionTitle: String {
+        if isLoadingMusic {
+            return latestMusicImport?.canRestart == true ? "Restarting…" : "Starting…"
+        }
         if latestMusicImport?.isActive == true { return "Import in Progress" }
         if latestMusicImport?.status == "failed" { return "Restart Failed Import" }
         if latestMusicImport?.status == "partial" { return "Retry Partial Import" }
@@ -436,7 +451,13 @@ struct SettingsView: View {
     private func loadMusicImports(showErrorOnFailure: Bool = true) async {
         guard canAttemptServerSync else { return }
         do {
-            musicImports = try await musicSyncAPI.imports()
+            let shouldRestoreOptions = musicImports.isEmpty
+            let imports = try await musicSyncAPI.imports()
+            musicImports = imports
+            if shouldRestoreOptions, let latestImport = imports.first {
+                includeSavedMusicPlaylists = latestImport.include_saved_playlists
+                includeSavedMusicTracks = latestImport.include_saved_tracks
+            }
         } catch where showErrorOnFailure {
             errorMessage = "Failed to load music import status: \(error.localizedDescription)"
         } catch {
@@ -451,10 +472,24 @@ struct SettingsView: View {
         catch { errorMessage = "Failed to connect \(provider.capitalized): \(error.localizedDescription)" }
     }
 
+    private func disconnectMusic(provider: String) async {
+        isLoadingMusic = true
+        defer { isLoadingMusic = false }
+        do {
+            try await musicSyncAPI.disconnectConnection(provider: provider)
+            musicConnections.removeAll { $0.provider == provider }
+        } catch {
+            errorMessage = "Failed to disconnect \(provider.capitalized): \(error.localizedDescription)"
+        }
+    }
+
     private func beginOrRestartMusicImport() async {
         if let latestMusicImport, latestMusicImport.canRestart {
             await performMusicImport {
-                try await musicSyncAPI.restartImport(id: latestMusicImport.id)
+                try await musicSyncAPI.restartImport(
+                    id: latestMusicImport.id,
+                    includeSavedPlaylists: includeSavedMusicPlaylists,
+                    includeSavedTracks: includeSavedMusicTracks)
             }
         } else {
             await performMusicImport {
@@ -531,6 +566,9 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
+            Text("Import reference: \(musicImport.shortReference)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
     }
@@ -832,7 +870,7 @@ struct SettingsView: View {
             return
         }
         Task {
-            await authManager.signInWithGoogle()
+            await authManager.signInWithGoogle(linkProvider: true)
             await MainActor.run {
                 if let message = authManager.errorMessage {
                     self.errorMessage = message

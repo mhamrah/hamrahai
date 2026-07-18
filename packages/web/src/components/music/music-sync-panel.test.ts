@@ -3,6 +3,7 @@ import type { MusicImportWire } from "@hamrah/shared";
 
 import {
   failedImportMessage,
+  importStage,
   musicImportOptionsDisabled,
 } from "./music-sync-panel";
 
@@ -65,5 +66,18 @@ describe("musicImportOptionsDisabled", () => {
         stage: "reading_spotify",
       }),
     ).toBe(true);
+  });
+});
+
+describe("importStage", () => {
+  it("names the provider operation that failed", () => {
+    expect(
+      importStage({
+        ...failedImport(),
+        stage: "adding_playlist_tracks",
+        playlist_total: 14,
+        playlists_imported: 1,
+      }),
+    ).toBe("Import failed while matching or adding playlist tracks");
   });
 });

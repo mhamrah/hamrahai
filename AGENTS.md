@@ -67,6 +67,30 @@ Regressions are treated as product failures, not test-suite trivia. Every non-tr
 - Tests should use realistic fixtures and assert durable outcomes, not incidental implementation details.
 - Do not weaken, delete, or snapshot-update failing tests without explaining the behavioral reason.
 
+### Completeness and Client Parity Contract
+
+A green build is evidence, not proof that the requested workflow is complete. Before editing, trace the real user action end to end and identify every implementation of that feature.
+
+- Start every user-facing feature or bug fix with an impact matrix covering: API, database/migrations, shared contracts, web, iOS, macOS, authentication/attestation, offline/sync behavior, external providers, and deployment/CI. Mark each surface `change`, `verified unaffected`, or `not applicable`.
+- Web and iOS/macOS are sibling clients. When a workflow exists in both, behavioral parity is the default even if the report names only one client. Inspect the sibling implementation before editing. Update it in the same PR when affected; otherwise state exactly why it is unaffected and name the verification performed.
+- A shared API request, response, validation rule, state transition, default, error, or permission change must update and test every consumer in the same PR. Do not silently defer a known client update.
+- For UI behavior, compare initial state, enabled/disabled rules, loading feedback, error/retry behavior, accessibility, responsive/native layout, and the final request payload across clients.
+- Trace the full path before declaring a fix: user interaction → view state → domain client → serialized request → auth/attestation → API handler → database/provider → response → rendered result. Check sibling callers and retry/error paths, not only the reported line.
+- Re-read the original request after implementation and again after tests. Review the final diff against the impact matrix; a package absent from the diff must still have explicit verification evidence when it owns the same workflow.
+
+### Validation Depth Contract
+
+Tests must fail at the boundary where the defect existed.
+
+- UI interaction defects need a test that exercises the state transition or user workflow; testing only a new helper is insufficient.
+- API defects need an HTTP/integration test covering extractor, auth policy, wire shape, persistence/constraints, and durable response where applicable.
+- External-provider changes need contract tests for the exact method, URL/path, headers, media type, encoding, pagination, and representative error/rate-limit behavior. Verify current primary provider documentation before changing a provider contract.
+- Docker, deployment, and workflow changes need the narrowest real artifact or job execution that would have caught the failure. Syntax parsing and unrelated package tests are not substitutes.
+- If an essential check cannot run locally, add or confirm the exact CI job, keep the PR in draft, and inspect that job's result before calling the work complete. Record what was not exercised and the residual risk.
+- For non-trivial cross-platform work, test the API plus every changed client. A workflow that deliberately skips a package is not evidence that package was verified.
+
+Every PR description must include the impact matrix, the end-to-end workflow tested, exact commands/results, compatibility and migration impact, security/privacy impact, and any intentionally excluded behavior. “No change” claims require evidence.
+
 ### Database Design Contract
 
 Keep databases simple, explicit, and hard to misuse.
@@ -115,6 +139,7 @@ cd packages/api && cargo build
 ## 📦 Package: API (Rust Backend)
 
 ### Technology Stack
+
 - **Framework**: Axum (async web framework)
 - **Runtime**: Tokio (async runtime)
 - **Database**: PostgreSQL with SQLx (compile-time checked queries)
@@ -124,6 +149,7 @@ cd packages/api && cargo build
 ### Architecture
 
 Backend API for all Hamrah clients (iOS, macOS, Web). Designed for:
+
 - Offline-first synchronization with conflict resolution
 - AI-powered content summarization and organization
 - Secure authentication with multiple providers
@@ -152,6 +178,7 @@ Backend API for all Hamrah clients (iOS, macOS, Web). Designed for:
 ### Development Standards
 
 **Code Quality:**
+
 ```bash
 cargo fmt              # Format code (run after every change)
 cargo clippy -- -D warnings  # Lint with warnings as errors
@@ -159,12 +186,14 @@ cargo test             # Run all tests
 ```
 
 **API Conventions:**
+
 - Use snake_case for all JSON keys (requests and responses)
 - Axum route syntax: `{param}` for path parameters (e.g., `/api/users/{id}`)
 - All timestamps in RFC 3339 (ISO 8601) UTC format
 - Consistent error responses with `success`, `error` fields
 
 **Database and Migrations:**
+
 - Keep PostgreSQL schemas normalized and boring unless a measured query or product need requires otherwise
 - Enforce invariants in the database first, then mirror them in application validation for better errors
 - Use SQLx checked queries where possible and keep query shape close to the handler/service that owns the behavior
@@ -172,12 +201,14 @@ cargo test             # Run all tests
 - Add tests that prove constraints, conflict behavior, pagination, and serialization shape
 
 **Deployment:**
+
 - Endpoint: `https://api.hamrah.app`
 - Secrets: `DATABASE_URL`, `JWT_SECRET` (Google Cloud Secret Manager)
 - Port: 8080
 - Health checks: `/healthz`, `/readyz`
 
 ### File Structure
+
 ```
 packages/api/
 ├── Cargo.toml           # Rust dependencies
@@ -197,6 +228,7 @@ packages/api/
 ## 🌐 Package: Web (Qwik/TypeScript Frontend)
 
 ### Technology Stack
+
 - **Framework**: Qwik (resumable framework)
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS v4
@@ -207,6 +239,7 @@ packages/api/
 ### Architecture
 
 Web application providing browser access to Hamrah functionality. Features:
+
 - Server-side rendering with Qwik
 - Progressive enhancement
 - API integration via HTTPS (no service bindings)
@@ -216,6 +249,7 @@ Web application providing browser access to Hamrah functionality. Features:
 ### Development Standards
 
 **Code Quality:**
+
 ```bash
 pnpm lint              # ESLint
 pnpm fmt               # Prettier formatting
@@ -225,12 +259,14 @@ pnpm test:e2e          # End-to-end tests
 ```
 
 **JSON and Data Shape:**
+
 - **CRITICAL**: All JSON keys MUST be snake_case (requests and responses)
 - No dual-case support (no camelCase fallbacks)
 - TypeScript interfaces mirror wire format with snake_case
 - Normalize third-party camelCase at integration boundaries
 
 **Example:**
+
 ```typescript
 type RegisterBeginRequest = {
   user_id: string;
@@ -247,23 +283,27 @@ type RegisterBeginResponse = {
 ```
 
 **API Integration:**
+
 - All requests to `https://api.hamrah.app`
 - Include proper headers: `Content-Type: application/json`
 - Handle errors gracefully with user feedback
 - Use snake_case for all request/response data
 
 **Naming Conventions:**
+
 - HTTP headers: lowercase, hyphen-separated (e.g., `x-user-id`)
 - Path parameters: snake_case (e.g., `/api/users/{user_id}`)
 - Query parameters: snake_case (e.g., `page_size`, `created_before`)
 - Timestamps: RFC 3339 in UTC (e.g., `created_at`, `expires_at`)
 
 **Deployment:**
+
 - Domain: `https://hamrah.app`
 - Configuration: `wrangler.toml`
 - Environment: Cloudflare Workers (edge runtime)
 
 ### File Structure
+
 ```
 packages/web/
 ├── package.json         # Dependencies and scripts
@@ -282,6 +322,7 @@ packages/web/
 ## 📱 Package: iOS (Swift Native App)
 
 ### Technology Stack
+
 - **UI Framework**: SwiftUI (100% SwiftUI, no UIKit for UI)
 - **Data**: SwiftData with App Group sharing
 - **Platforms**: iOS 17+, macOS 14+
@@ -291,6 +332,7 @@ packages/web/
 ### Architecture
 
 Native Swift application for iOS and macOS providing offline-first experience with full-featured mobile access to Hamrah. Key features:
+
 - Cross-platform (iOS and macOS) with shared codebase
 - Offline-first with local SwiftData cache
 - Background sync with hamrah-api
@@ -320,6 +362,7 @@ Native Swift application for iOS and macOS providing offline-first experience wi
    - Validate all API responses
 
 ### Architecture Structure
+
 ```
 packages/ios/
 ├── Core/
@@ -345,12 +388,14 @@ packages/ios/
 ### SwiftUI-Only Development
 
 **✅ ALLOWED UIKit Usage (Very Limited):**
+
 - `PlatformBridge.swift` - Platform abstraction utilities
 - `NativeAuthManager.swift` - Authentication contexts
 - `AppAttestationManager.swift` - iOS App Attestation APIs
 - `WebView` wrappers - UIViewRepresentable/NSViewRepresentable
 
 **❌ PROHIBITED UIKit Usage:**
+
 - `UIAlertController` - Use SwiftUI alerts
 - `UIActivityViewController` - Use SwiftUI `ShareLink`
 - `UIApplication.shared.open()` - Use `@Environment(\.openURL)`
@@ -360,6 +405,7 @@ packages/ios/
 ### Development Standards
 
 **Use Platform Components:**
+
 ```swift
 // ✅ CORRECT
 PlatformButton("Save", systemImage: "checkmark", style: .primary) {
@@ -373,6 +419,7 @@ Button("Save") { }.buttonStyle(.borderedProminent)
 ```
 
 **Use Theme System:**
+
 ```swift
 // ✅ CORRECT
 Text("Title")
@@ -387,6 +434,7 @@ Text("Title")
 ```
 
 **Optimized SwiftData Queries:**
+
 ```swift
 // ✅ CORRECT - Use query descriptors
 let descriptor = LinkQueryDescriptors.filtered(
@@ -401,6 +449,7 @@ let descriptor = LinkQueryDescriptors.filtered(
 ```
 
 **ViewModel Pattern:**
+
 ```swift
 // ✅ CORRECT - Follow ViewModelProtocol
 class FeatureViewModel: BaseViewModel {
@@ -433,12 +482,14 @@ class FeatureViewModel: BaseViewModel {
 ### Platform-Specific Guidelines
 
 **iOS:**
+
 - Support iOS 17+ with backwards compatibility
 - Share Extension for URL capture
 - Face ID/Touch ID biometric auth
 - Dynamic Type and accessibility support
 
 **macOS:**
+
 - Support macOS 14+ (Sonoma+)
 - Native interactions (right-click, keyboard shortcuts)
 - Multiple window support
@@ -453,6 +504,7 @@ class FeatureViewModel: BaseViewModel {
 All projects communicate with the API using consistent snake_case JSON:
 
 **Authentication:**
+
 ```typescript
 // Register begin
 POST /api/webauthn/register/begin
@@ -471,6 +523,7 @@ Response: {
 ```
 
 **Token Management:**
+
 ```typescript
 POST /api/auth/token
 Response: {
@@ -497,6 +550,7 @@ Response: {
 **Trigger:** Push to `main` with changes in `packages/api/**`
 
 **Process:**
+
 1. Build Docker image from `packages/api/Dockerfile`
 2. Push to Google Artifact Registry
 3. Deploy to Cloud Run service `hamrah-api`
@@ -509,6 +563,7 @@ Response: {
 **Trigger:** Push to `main` with changes in `packages/web/**`
 
 **Process:**
+
 1. Install dependencies with pnpm
 2. Build with Vite
 3. Deploy to Cloudflare Workers via wrangler
@@ -519,6 +574,7 @@ Response: {
 ### iOS Deployment (App Store)
 
 **Manual process via Xcode:**
+
 1. Open `packages/ios/hamrah-ios.xcodeproj`
 2. Archive build
 3. Upload to App Store Connect
@@ -529,6 +585,7 @@ Response: {
 ## 🧪 Testing Strategy
 
 ### API Tests
+
 ```bash
 cd packages/api
 cargo test                    # All tests
@@ -536,6 +593,7 @@ cargo test --test integration # Integration tests only
 ```
 
 ### Web Tests
+
 ```bash
 cd packages/web
 pnpm test:run                 # Unit tests
@@ -544,6 +602,7 @@ pnpm test:coverage            # Coverage report
 ```
 
 ### iOS Tests
+
 - Open Xcode project
 - ⌘+U to run all tests
 - View coverage in Xcode's coverage report

@@ -41,6 +41,7 @@ struct ProviderTokenResponse {
 #[derive(Deserialize)]
 struct SpotifyAccountResponse {
     id: String,
+    display_name: Option<String>,
 }
 #[derive(Deserialize)]
 struct TidalAccountResponse {
@@ -49,6 +50,15 @@ struct TidalAccountResponse {
 #[derive(Deserialize)]
 struct TidalAccountData {
     id: String,
+    attributes: TidalAccountAttributes,
+}
+#[derive(Deserialize)]
+struct TidalAccountAttributes {
+    username: String,
+}
+struct ProviderAccount {
+    id: String,
+    name: Option<String>,
 }
 #[derive(sqlx::FromRow)]
 struct OAuthState {
@@ -82,6 +92,7 @@ pub struct BeginConnectionResponse {
 pub struct MusicConnectionResponse {
     pub provider: String,
     pub provider_account_id: Option<String>,
+    pub provider_account_name: Option<String>,
     pub status: String,
     pub connected_at: Option<chrono::DateTime<Utc>>,
     pub last_error: Option<String>,
@@ -156,6 +167,15 @@ fn redirect_path(value: Option<String>) -> Result<String, &'static str> {
     } else {
         Err("redirect_path must be a local path")
     }
+}
+
+fn music_connection_error_redirect(redirect_path: &str, provider: &str, reason: &str) -> Response {
+    axum::response::Redirect::temporary(&format!(
+        "{}{}?music_connection_error={reason}&music_provider={provider}",
+        std::env::var("WEB_APP_URL").unwrap_or_else(|_| "https://hamrah.app".to_string()),
+        redirect_path
+    ))
+    .into_response()
 }
 fn env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("{name} is not configured"))
@@ -236,7 +256,7 @@ pub async fn list_connections(State(pool): State<DbPool>, headers: HeaderMap) ->
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    match sqlx::query_as::<_, MusicConnectionResponse>("SELECT provider, provider_account_id, status, connected_at, last_error FROM music_connections WHERE user_id = $1 ORDER BY provider")
+    match sqlx::query_as::<_, MusicConnectionResponse>("SELECT provider, provider_account_id, provider_account_name, status, connected_at, last_error FROM music_connections WHERE user_id = $1 ORDER BY provider")
         .bind(claims.sub).fetch_all(&pool).await {
         Ok(rows) => Json(rows).into_response(), Err(err) => { tracing::error!(%err, "list music connections"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not load music connections") }
     }
@@ -269,7 +289,7 @@ pub async fn begin_connection(
     let url = match provider.as_str() {
         "spotify" => match (env("SPOTIFY_CLIENT_ID"), env("SPOTIFY_REDIRECT_URI")) {
             (Ok(client_id), Ok(callback)) => format!(
-                "https://accounts.spotify.com/authorize?response_type=code&client_id={}&redirect_uri={}&state={state}&code_challenge={}&code_challenge_method=S256&scope={}",
+                "https://accounts.spotify.com/authorize?response_type=code&client_id={}&redirect_uri={}&state={state}&code_challenge={}&code_challenge_method=S256&scope={}&show_dialog=true",
                 query_value(&client_id),
                 query_value(&callback),
                 code_challenge(&verifier),
@@ -344,12 +364,7 @@ pub async fn complete_connection(
         Ok(Some(value)) => value, Ok(None) => return error(StatusCode::BAD_REQUEST, "expired or invalid oauth state"), Err(err) => { tracing::error!(%err, "consume music oauth state"); return error(StatusCode::INTERNAL_SERVER_ERROR, "could not complete connection"); }
     };
     if query.error.is_some() {
-        return axum::response::Redirect::temporary(&format!(
-            "{}{}?music_connection_error=declined",
-            std::env::var("WEB_APP_URL").unwrap_or_else(|_| "https://hamrah.app".to_string()),
-            row.redirect_path
-        ))
-        .into_response();
+        return music_connection_error_redirect(&row.redirect_path, &provider, "declined");
     }
     let Some(code) = query.code else {
         return error(StatusCode::BAD_REQUEST, "missing authorization code");
@@ -358,10 +373,24 @@ pub async fn complete_connection(
         Ok(value) => value,
         Err(message) => {
             tracing::warn!(provider, %message, "music oauth exchange failed");
-            return error(StatusCode::BAD_GATEWAY, "provider authorization failed");
+            return music_connection_error_redirect(
+                &row.redirect_path,
+                &provider,
+                "authorization_failed",
+            );
         }
     };
-    let provider_account_id = provider_account_id(&provider, &token.access_token).await;
+    let provider_account = match provider_account(&provider, &token.access_token).await {
+        Ok(account) => account,
+        Err(message) => {
+            tracing::warn!(provider, %message, "music provider account lookup failed");
+            return music_connection_error_redirect(
+                &row.redirect_path,
+                &provider,
+                "account_verification_failed",
+            );
+        }
+    };
     let access = match encrypt_token(&token.access_token) {
         Ok(value) => value,
         Err(message) => return error(StatusCode::SERVICE_UNAVAILABLE, &message),
@@ -384,8 +413,8 @@ pub async fn complete_connection(
     let expiry = token
         .expires_in
         .map(|seconds| Utc::now() + Duration::seconds(seconds));
-    if let Err(err) = sqlx::query("INSERT INTO music_connections (id,user_id,provider,provider_account_id,access_token_encrypted,refresh_token_encrypted,token_expires_at,granted_scopes,status,connected_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'connected',NOW()) ON CONFLICT (user_id,provider) DO UPDATE SET provider_account_id=COALESCE(EXCLUDED.provider_account_id, music_connections.provider_account_id), access_token_encrypted=EXCLUDED.access_token_encrypted, refresh_token_encrypted=EXCLUDED.refresh_token_encrypted, token_expires_at=EXCLUDED.token_expires_at, granted_scopes=EXCLUDED.granted_scopes, status='connected', last_error=NULL, connected_at=NOW(), updated_at=NOW()")
-        .bind(Uuid::new_v4()).bind(row.user_id).bind(&provider).bind(provider_account_id).bind(access).bind(refresh).bind(expiry).bind(scopes).execute(&pool).await { tracing::error!(%err, "store music connection"); return error(StatusCode::INTERNAL_SERVER_ERROR, "could not save music connection"); }
+    if let Err(err) = sqlx::query("INSERT INTO music_connections (id,user_id,provider,provider_account_id,provider_account_name,access_token_encrypted,refresh_token_encrypted,token_expires_at,granted_scopes,status,connected_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'connected',NOW()) ON CONFLICT (user_id,provider) DO UPDATE SET provider_account_id=EXCLUDED.provider_account_id, provider_account_name=EXCLUDED.provider_account_name, access_token_encrypted=EXCLUDED.access_token_encrypted, refresh_token_encrypted=EXCLUDED.refresh_token_encrypted, token_expires_at=EXCLUDED.token_expires_at, granted_scopes=EXCLUDED.granted_scopes, status='connected', last_error=NULL, connected_at=NOW(), updated_at=NOW()")
+        .bind(Uuid::new_v4()).bind(row.user_id).bind(&provider).bind(provider_account.id).bind(provider_account.name).bind(access).bind(refresh).bind(expiry).bind(scopes).execute(&pool).await { tracing::error!(%err, "store music connection"); return error(StatusCode::INTERNAL_SERVER_ERROR, "could not save music connection"); }
     axum::response::Redirect::temporary(&format!(
         "{}{}?music_connection={provider}",
         std::env::var("WEB_APP_URL").unwrap_or_else(|_| "https://hamrah.app".to_string()),
@@ -444,35 +473,45 @@ async fn exchange_code(
     }
 }
 
-async fn provider_account_id(provider: &str, access_token: &str) -> Option<String> {
+async fn provider_account(provider: &str, access_token: &str) -> Result<ProviderAccount, String> {
     let client = reqwest::Client::new();
     match provider {
-        "spotify" => client
-            .get("https://api.spotify.com/v1/me")
-            .bearer_auth(access_token)
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .json::<SpotifyAccountResponse>()
-            .await
-            .ok()
-            .map(|account| account.id),
-        "tidal" => client
-            .get("https://openapi.tidal.com/v2/users/me")
-            .bearer_auth(access_token)
-            .header("accept", "application/vnd.tidal.v1+json")
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .json::<TidalAccountResponse>()
-            .await
-            .ok()
-            .map(|account| account.data.id),
-        _ => None,
+        "spotify" => {
+            let account = client
+                .get("https://api.spotify.com/v1/me")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .map_err(|error| error.to_string())?
+                .error_for_status()
+                .map_err(|error| error.to_string())?
+                .json::<SpotifyAccountResponse>()
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(ProviderAccount {
+                id: account.id,
+                name: account.display_name,
+            })
+        }
+        "tidal" => {
+            let account = client
+                .get("https://openapi.tidal.com/v2/users/me")
+                .bearer_auth(access_token)
+                .header("accept", "application/vnd.api+json")
+                .send()
+                .await
+                .map_err(|error| error.to_string())?
+                .error_for_status()
+                .map_err(|error| error.to_string())?
+                .json::<TidalAccountResponse>()
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(ProviderAccount {
+                id: account.data.id,
+                name: Some(account.data.attributes.username),
+            })
+        }
+        _ => Err("unsupported provider".to_string()),
     }
 }
 
@@ -644,6 +683,36 @@ async fn has_active_import(pool: &DbPool, user_id: Uuid) -> Result<bool, sqlx::E
         .await
 }
 
+fn public_import_failure_message(failure: &import::ImportFailure, import_id: Uuid) -> String {
+    let reference = &import_id.to_string()[..8];
+    let message = failure
+        .message
+        .replace("spotify", "Spotify")
+        .replace("tidal", "TIDAL");
+    let detail = if message.starts_with("TIDAL is temporarily rate limiting")
+        || message.contains("authorization needs")
+        || message.contains("authorization expired")
+        || message.contains("is not connected")
+    {
+        message
+    } else {
+        match failure.progress.stage {
+            "reading_spotify" => "Spotify could not read the selected music. No changes were made in TIDAL. Reconnect Spotify, then restart this import.".to_string(),
+            "creating_playlists" => "TIDAL could not create the destination playlist after Spotify was read successfully. Restart to retry safely; reconnect TIDAL only if this repeats.".to_string(),
+            "adding_playlist_tracks" if failure.message.contains("400 Bad Request") => format!(
+                "TIDAL rejected Hamrah's track-matching request while adding playlist songs. Spotify was read successfully and {} TIDAL {} already created. Restart to retry safely; reconnecting Spotify will not help.",
+                failure.progress.playlists_imported,
+                if failure.progress.playlists_imported == 1 { "playlist was" } else { "playlists were" },
+            ),
+            "adding_playlist_tracks" => "TIDAL could not match or add playlist tracks after Spotify was read successfully. Restart to retry safely; reconnect TIDAL only if this repeats.".to_string(),
+            "matching_artists" | "following_artists" => "TIDAL could not finish matching or following artists. Playlist work already completed is safe. Restart to continue with the same import.".to_string(),
+            "saving_liked_tracks" => "TIDAL could not finish saving Liked Songs. Playlist and artist work already completed is safe. Restart to continue with the same import.".to_string(),
+            _ => "The music import could not be completed. Restart to retry safely. Reconnect a provider only if its account card or a new error specifically asks you to.".to_string(),
+        }
+    };
+    format!("{detail} Reference: {reference}.")
+}
+
 async fn run_import(
     pool: &DbPool,
     user_id: Uuid,
@@ -716,16 +785,7 @@ async fn run_import(
                 unmatched_items = failure.outcome.unmatched_items,
                 "music import failed"
             );
-            let import_error = if failure
-                .message
-                .starts_with("TIDAL is temporarily rate limiting")
-                || failure.message.contains("authorization needs")
-            {
-                failure.message
-            } else {
-                "could not complete music import; reconnect both providers and try again"
-                    .to_string()
-            };
+            let import_error = public_import_failure_message(&failure, import_id);
             (
                 "failed",
                 failure.outcome,
@@ -734,11 +794,9 @@ async fn run_import(
             )
         }
     };
-    progress.stage = if status == "failed" {
-        "failed"
-    } else {
-        "completed"
-    };
+    if status != "failed" {
+        progress.stage = "completed";
+    }
     match sqlx::query_as::<_, MusicImportResponse>("UPDATE music_import_runs SET status = $1, stage = $2, total_items = $3, imported_items = $4, unmatched_items = $5, playlist_total = $6, playlists_imported = $7, artist_total = $8, artists_checked = $9, artists_matched = $10, artists_followed = $11, playlist_track_total = $12, playlist_tracks_imported = $13, saved_track_total = $14, saved_tracks_imported = $15, tracks_matched = $16, error = $17, completed_at = NOW(), progress_updated_at = NOW() WHERE id = $18 AND status = 'running' RETURNING id,status,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,stage,total_items,imported_items,unmatched_items,playlist_total,playlists_imported,artist_total,artists_checked,artists_matched,artists_followed,playlist_track_total,playlist_tracks_imported,saved_track_total,saved_tracks_imported,tracks_matched,error,created_at")
         .bind(status).bind(progress.stage).bind(outcome.total_items).bind(outcome.imported_items).bind(outcome.unmatched_items).bind(progress.playlist_total).bind(progress.playlists_imported).bind(progress.artist_total).bind(progress.artists_checked).bind(progress.artists_matched).bind(progress.artists_followed).bind(progress.playlist_track_total).bind(progress.playlist_tracks_imported).bind(progress.saved_track_total).bind(progress.saved_tracks_imported).bind(progress.tracks_matched).bind(import_error).bind(import_id).fetch_optional(pool).await {
         Ok(Some(row)) => (StatusCode::CREATED, Json(row)).into_response(),
@@ -953,5 +1011,23 @@ mod tests {
         assert!(request.include_owned_playlists);
         assert!(request.include_followed_artists);
         assert!(!request.include_saved_tracks);
+    }
+    #[test]
+    fn track_lookup_failures_explain_the_real_stage_and_preserve_a_reference() {
+        let import_id = Uuid::parse_str("da34e2d8-94a4-4b54-9223-a61fc11feb9b").unwrap();
+        let failure = import::ImportFailure {
+            message: "HTTP status client error (400 Bad Request)".to_string(),
+            outcome: import::ImportOutcome::default(),
+            progress: import::ImportProgress {
+                stage: "adding_playlist_tracks",
+                playlists_imported: 1,
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(
+            public_import_failure_message(&failure, import_id),
+            "TIDAL rejected Hamrah's track-matching request while adding playlist songs. Spotify was read successfully and 1 TIDAL playlist was already created. Restart to retry safely; reconnecting Spotify will not help. Reference: da34e2d8."
+        );
     }
 }

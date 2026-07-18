@@ -3,6 +3,7 @@ import Foundation
 struct MusicConnectionDTO: Codable, Identifiable {
     let provider: String
     let provider_account_id: String?
+    let provider_account_name: String?
     let status: String
     let connected_at: String?
     let last_error: String?
@@ -10,7 +11,7 @@ struct MusicConnectionDTO: Codable, Identifiable {
     var id: String { provider }
 }
 
-struct MusicImportRequestDTO: Codable {
+struct MusicImportRequestDTO: Codable, Equatable {
     let include_owned_playlists: Bool
     let include_saved_playlists: Bool
     let include_followed_artists: Bool
@@ -44,6 +45,7 @@ struct MusicImportDTO: Codable, Identifiable {
 
     var isActive: Bool { status == "queued" || status == "running" }
     var canRestart: Bool { status == "failed" || status == "partial" }
+    var importOptionsAreEditable: Bool { !isActive }
 
     var sourceSummary: String {
         let playlists = "\(playlist_total) Spotify \(playlist_total == 1 ? "playlist" : "playlists")"
@@ -54,7 +56,17 @@ struct MusicImportDTO: Codable, Identifiable {
     }
 
     var stageDescription: String {
-        switch stage {
+        if status == "failed" {
+            return switch stage {
+            case "reading_spotify": "Import failed while reading Spotify"
+            case "creating_playlists": "Import failed while creating TIDAL playlists"
+            case "adding_playlist_tracks": "Import failed while matching or adding playlist tracks"
+            case "matching_artists", "following_artists": "Import failed while matching or following artists"
+            case "saving_liked_tracks": "Import failed while saving Liked Songs"
+            default: "Import failed"
+            }
+        }
+        return switch stage {
         case "queued", "preparing": "Preparing secure connections"
         case "reading_spotify": "Reading selected Spotify collections"
         case "creating_playlists": "Creating TIDAL playlists"
@@ -99,6 +111,8 @@ struct MusicImportDTO: Codable, Identifiable {
             ? "Restart the incomplete import to safely reuse its original TIDAL idempotency keys."
             : nil
     }
+
+    var shortReference: String { String(id.prefix(8)) }
 }
 
 struct MusicAuthorizationDTO: Codable { let authorization_url: String }
@@ -122,6 +136,13 @@ struct MusicSyncAPI {
         return url
     }
 
+    func disconnectConnection(provider: String) async throws {
+        let _: EmptyResponse = try await client.delete(
+            "/v1/music/connections/\(provider)",
+            auth: .required,
+            responseType: EmptyResponse.self)
+    }
+
     func startImport(
         includeSavedPlaylists: Bool,
         includeSavedTracks: Bool
@@ -137,9 +158,18 @@ struct MusicSyncAPI {
             responseType: MusicImportDTO.self)
     }
 
-    func restartImport(id: String) async throws -> MusicImportDTO {
+    func restartImport(
+        id: String,
+        includeSavedPlaylists: Bool,
+        includeSavedTracks: Bool
+    ) async throws -> MusicImportDTO {
         try await client.post(
             "/v1/music/imports/\(id)/restart",
+            body: MusicImportRequestDTO(
+                include_owned_playlists: true,
+                include_saved_playlists: includeSavedPlaylists,
+                include_followed_artists: true,
+                include_saved_tracks: includeSavedTracks),
             auth: .required,
             responseType: MusicImportDTO.self)
     }

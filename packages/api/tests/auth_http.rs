@@ -215,6 +215,11 @@ async fn http_music_connections_accept_a_valid_web_session() -> anyhow::Result<(
     let user = upsert_user(&pool, &user_email, Some("Music Session Test")).await?;
     let raw_session = Uuid::new_v4().to_string();
     create_session(&pool, user.id, &raw_session, 6).await?;
+    sqlx::query("INSERT INTO music_connections (id,user_id,provider,provider_account_id,provider_account_name,status) VALUES ($1,$2,'spotify','spotify-user-id','Spotify Display Name','connected')")
+        .bind(Uuid::new_v4())
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
 
     let req = Request::builder()
         .method("GET")
@@ -228,7 +233,13 @@ async fn http_music_connections_accept_a_valid_web_session() -> anyhow::Result<(
 
     let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let connections: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(connections.is_empty());
+    assert_eq!(connections.len(), 1);
+    assert_eq!(connections[0]["provider"], "spotify");
+    assert_eq!(connections[0]["provider_account_id"], "spotify-user-id");
+    assert_eq!(
+        connections[0]["provider_account_name"],
+        "Spotify Display Name"
+    );
 
     Ok(())
 }
@@ -276,6 +287,11 @@ async fn http_music_connection_begin_accepts_a_valid_web_session() -> anyhow::Re
         response["authorization_url"]
             .as_str()
             .is_some_and(|url| url.starts_with("https://accounts.spotify.com/authorize?"))
+    );
+    assert!(
+        response["authorization_url"]
+            .as_str()
+            .is_some_and(|url| url.contains("show_dialog=true"))
     );
 
     Ok(())
@@ -326,6 +342,7 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
     let import_id = import_id.to_string();
     assert_eq!(response["id"].as_str(), Some(import_id.as_str()));
     assert_eq!(response["status"], "failed");
+    assert_eq!(response["stage"], "preparing");
     assert_eq!(response["include_saved_playlists"], true);
     assert_eq!(response["include_saved_tracks"], true);
 
@@ -790,6 +807,45 @@ async fn http_native_apple_rejects_conflicting_token_fields_without_422() -> any
 }
 
 #[tokio::test]
+async fn http_native_provider_link_requires_an_authenticated_session() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("GOOGLE_AUTH_TEST_BYPASS", "true");
+    }
+
+    let email = format!("unlinked-provider-{}@example.com", Uuid::new_v4());
+    let payload = json!({
+        "provider": "google",
+        "platform": "ios",
+        "id_token": format!("test-google:{email}"),
+        "link_provider": "true"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body_bytes = body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(parsed["success"], false);
+    assert_eq!(
+        parsed["error"],
+        "Sign in again before linking an authentication provider"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow::Result<()> {
     let Some((_pool, router)) = setup_router().await? else {
         return Ok(());
@@ -826,7 +882,8 @@ async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow:
     let google_payload = json!({
         "provider": "google",
         "platform": "ios",
-        "id_token": format!("test-google:{google_email}")
+        "id_token": format!("test-google:{google_email}"),
+        "link_provider": "true"
     });
     let google_req = Request::builder()
         .method("POST")

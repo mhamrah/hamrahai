@@ -195,6 +195,7 @@ export type MusicProvider = "spotify" | "tidal";
 export interface MusicConnectionWire {
   provider: MusicProvider;
   provider_account_id?: string | null;
+  provider_account_name?: string | null;
   status: "pending" | "connected" | "error";
   connected_at?: string | null;
   last_error?: string | null;
