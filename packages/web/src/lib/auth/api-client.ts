@@ -70,6 +70,7 @@ export interface ApiAuthResponse {
 
 export interface NativeAuthRequest {
   provider?: string;
+  id_token?: string;
   credential?: string;
   email?: string;
   name?: string;

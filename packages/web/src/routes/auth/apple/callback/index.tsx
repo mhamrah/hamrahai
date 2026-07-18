@@ -1,5 +1,8 @@
 import type { RequestHandler } from "@builder.io/qwik-city";
-import { getAppleProvider } from "~/lib/auth/providers";
+import {
+  buildAppleNativeAuthRequest,
+  getAppleProvider,
+} from "~/lib/auth/providers";
 import { setSessionTokenCookie } from "~/lib/auth/session";
 import { createApiClient } from "~/lib/auth/api-client";
 import { safeRedirectPath } from "~/lib/auth/redirects";
@@ -26,38 +29,39 @@ export const onPost: RequestHandler = async (event) => {
     throw event.redirect(302, "/auth/login?error=invalid_request");
   }
 
-  const apple = getAppleProvider(event);
-  const tokens = await apple.validateAuthorizationCode(code);
-
-  // Apple returns user info in the ID token
-  const idTokenPayload = JSON.parse(atob(tokens.idToken().split(".")[1]));
-
   try {
-    // Create user and session via public API
-    const apiClient = createApiClient(event);
-    const authResult = await apiClient.nativeAuth({
-      email: idTokenPayload.email,
-      name: idTokenPayload.name || idTokenPayload.email?.split("@")[0],
-      provider: "apple",
-      provider_id: idTokenPayload.sub,
-      auth_method: "apple",
-      platform: "web",
-      email_verified_at: idTokenPayload.email_verified
-        ? new Date().toISOString()
-        : undefined,
-    });
-
-    if (authResult.refresh_token) {
-      const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30); // 30 days
-      setSessionTokenCookie(event, authResult.refresh_token, expiresAt);
+    const apple = getAppleProvider(event);
+    const tokens = await apple.validateAuthorizationCode(code);
+    const idToken = tokens.idToken();
+    if (!idToken) {
+      throw new Error("No ID token received from Apple");
     }
 
-    // Clear OAuth state cookie
+    const apiClient = createApiClient(event);
+    const authResult = await apiClient.nativeAuth(
+      buildAppleNativeAuthRequest(idToken),
+    );
+
+    if (!authResult.refresh_token) {
+      throw new Error("Apple sign-in did not create a session");
+    }
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+    setSessionTokenCookie(event, authResult.refresh_token, expiresAt);
+  } catch (error) {
+    console.error(
+      "Apple sign-in could not create an API session",
+      error instanceof Error ? error.message : "unknown error",
+    );
     event.cookie.delete("apple_oauth_state");
     event.cookie.delete("apple_oauth_redirect");
-  } catch (ex) {
-    console.log("apple error", JSON.stringify(ex));
-    throw ex;
+    throw event.redirect(
+      302,
+      "/auth/login?error=" +
+        encodeURIComponent("Unable to sign in with Apple. Please try again."),
+    );
   }
+
+  event.cookie.delete("apple_oauth_state");
+  event.cookie.delete("apple_oauth_redirect");
   throw event.redirect(302, redirect);
 };
