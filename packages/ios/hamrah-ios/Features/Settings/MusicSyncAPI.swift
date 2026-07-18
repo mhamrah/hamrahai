@@ -92,6 +92,13 @@ struct MusicImportDTO: Codable, Identifiable {
     var transferSummary: String {
         "\(imported_items) of \(total_items) selected items transferred"
     }
+
+    var recoveryMessage: String? {
+        if let error { return error }
+        return canRestart
+            ? "Restart the incomplete import to safely reuse its original TIDAL idempotency keys."
+            : nil
+    }
 }
 
 struct MusicAuthorizationDTO: Codable { let authorization_url: String }
@@ -115,10 +122,17 @@ struct MusicSyncAPI {
         return url
     }
 
-    func startImport(includeSavedPlaylists: Bool) async throws -> MusicImportDTO {
+    func startImport(
+        includeSavedPlaylists: Bool,
+        includeSavedTracks: Bool
+    ) async throws -> MusicImportDTO {
         try await client.post(
             "/v1/music/imports",
-            body: MusicImportRequestDTO(include_owned_playlists: true, include_saved_playlists: includeSavedPlaylists, include_followed_artists: true, include_saved_tracks: true),
+            body: MusicImportRequestDTO(
+                include_owned_playlists: true,
+                include_saved_playlists: includeSavedPlaylists,
+                include_followed_artists: true,
+                include_saved_tracks: includeSavedTracks),
             auth: .required,
             responseType: MusicImportDTO.self)
     }

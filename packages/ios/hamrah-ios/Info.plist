@@ -29,6 +29,8 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Hamrah uses Face ID to securely unlock your account on this device.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

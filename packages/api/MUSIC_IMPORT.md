@@ -16,6 +16,8 @@ Hamrah provides a one-way, user-authorized import from Spotify to TIDAL.
   does not expose a private playlist access type.
 - Owned Spotify playlists are selected by default. The user can also select
   playlists saved in their Spotify library.
+- Spotify Liked Songs are optional. Selecting them requires Spotify's
+  `user-library-read` permission; playlist-track imports do not.
 - An artist is followed only when TIDAL search returns an exact name match
   (case and whitespace insensitive). Ambiguous or absent matches are reported
   as unmatched; Hamrah never guesses.
@@ -55,6 +57,10 @@ The import itself performs these steps:
 5. Search TIDAL for exact artist-name matches and follow matches in batches of
    at most 50.
 6. Persist progress and a completed, partial, or failed `music_import_runs` row.
+
+If Spotify denies access to an individual playlist, the import skips that
+playlist, records it as unmatched, and completes the remaining collections as
+a partial import. The run tells the user to restore access and retry safely.
 
 TIDAL write requests use an import-run-specific idempotency key. The database
 also permits only one queued or running import per Hamrah user.
@@ -110,10 +116,10 @@ Use an allowlisted Spotify development-mode account and a TIDAL test account.
 2. Create one public and one non-public Spotify playlist, each containing a
    track available in TIDAL; like one additional Spotify track; and add a
    followed artist with an unambiguous TIDAL name.
-3. Start an import without saved playlists, then verify two TIDAL playlists
-   with the correct public/unlisted visibility, the exact track
-   matches in each playlist, the Liked Song saved to the TIDAL collection, and
-   the matched TIDAL artist follow.
+3. Start an import with the Liked Songs option selected but without saved
+   playlists, then verify two TIDAL playlists with the correct public/unlisted
+   visibility, the exact track matches in each playlist, the Liked Song saved
+   to the TIDAL collection, and the matched TIDAL artist follow.
 4. Save another Spotify playlist, repeat with the saved-playlists option, and
    verify that its playlist and exact tracks are created.
 5. Verify a track with no TIDAL ISRC match is not copied and increases the
