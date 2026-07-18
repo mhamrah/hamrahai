@@ -12,7 +12,7 @@ struct MusicImportDTOTests {
         )
 
         #expect(musicImport.isActive)
-        #expect(musicImport.sourceSummary == "Selected from Spotify: 3 Spotify playlists and 12 followed artists.")
+        #expect(musicImport.sourceSummary == "Selected from Spotify: 3 Spotify playlists, 0 playlist tracks, 0 Liked Songs, and 12 followed artists.")
         #expect(musicImport.stageDescription == "Finding exact artist matches in TIDAL")
         #expect(musicImport.stageProgress?.current == 7)
         #expect(musicImport.stageProgress?.total == 12)
@@ -30,6 +30,20 @@ struct MusicImportDTOTests {
         #expect(musicImport.stageProgress?.current == 5)
         #expect(musicImport.stageProgress?.total == 8)
         #expect(musicImport.stageProgress?.label == "5 of 8 exact matches followed")
+    }
+
+    @Test
+    func playlistTrackStageShowsCopiedTrackProgress() {
+        let musicImport = makeImport(
+            stage: "adding_playlist_tracks",
+            playlistTrackTotal: 11,
+            playlistTracksImported: 7
+        )
+
+        #expect(musicImport.stageDescription == "Adding exact playlist-track matches to TIDAL")
+        #expect(musicImport.stageProgress?.current == 7)
+        #expect(musicImport.stageProgress?.total == 11)
+        #expect(musicImport.stageProgress?.label == "7 of 11 playlist tracks added")
     }
 
     @Test
@@ -59,7 +73,11 @@ struct MusicImportDTOTests {
         artistTotal: Int = 0,
         artistsChecked: Int = 0,
         artistsMatched: Int = 0,
-        artistsFollowed: Int = 0
+        artistsFollowed: Int = 0,
+        playlistTrackTotal: Int = 0,
+        playlistTracksImported: Int = 0,
+        savedTrackTotal: Int = 0,
+        savedTracksImported: Int = 0
     ) -> MusicImportDTO {
         MusicImportDTO(
             id: "import-1",
@@ -67,6 +85,7 @@ struct MusicImportDTOTests {
             include_owned_playlists: true,
             include_saved_playlists: false,
             include_followed_artists: true,
+            include_saved_tracks: true,
             stage: stage,
             total_items: playlistTotal + artistTotal,
             imported_items: playlistsImported + artistsFollowed,
@@ -77,6 +96,11 @@ struct MusicImportDTOTests {
             artists_checked: artistsChecked,
             artists_matched: artistsMatched,
             artists_followed: artistsFollowed,
+            playlist_track_total: playlistTrackTotal,
+            playlist_tracks_imported: playlistTracksImported,
+            saved_track_total: savedTrackTotal,
+            saved_tracks_imported: savedTracksImported,
+            tracks_matched: playlistTracksImported + savedTracksImported,
             error: nil,
             created_at: "2026-07-17T00:00:00Z"
         )

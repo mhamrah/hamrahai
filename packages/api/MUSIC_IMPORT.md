@@ -5,8 +5,12 @@
 Hamrah provides a one-way, user-authorized import from Spotify to TIDAL.
 
 - Spotify is a read-only source. Hamrah never writes to Spotify.
-- TIDAL is the destination. Hamrah creates playlist shells and follows artists.
-- No tracks, playlist items, artwork, or playlist descriptions are transferred.
+- TIDAL is the destination. Hamrah creates playlists, copies playlist tracks,
+  saves Spotify Liked Songs to the TIDAL collection, and follows artists.
+- Tracks are copied only when Spotify and TIDAL report the same ISRC. Missing,
+  ambiguous, local, or non-track Spotify items are reported as unmatched;
+  Hamrah never uses title/artist heuristics for tracks.
+- Artwork and playlist descriptions are not transferred.
 - A public Spotify playlist creates a public TIDAL playlist. Every other Spotify
   playlist creates an unlisted TIDAL playlist, because TIDAL's third-party API
   does not expose a private playlist access type.
@@ -28,22 +32,29 @@ While it runs, `GET /v1/music/imports` exposes the active run's stage and
 collection-specific counts, so clients can show what is selected and its live
 progress:
 
-- selected Spotify playlists and followed artists;
+- selected Spotify playlists, playlist tracks, Liked Songs, and followed artists;
 - TIDAL playlists created;
+- playlist tracks added and Liked Songs saved;
 - Spotify artists checked for an exact TIDAL match; and
 - exact matches successfully followed.
 
 The stages are `preparing`, `reading_spotify`, `creating_playlists`,
-`matching_artists`, and `following_artists`, followed by a terminal status.
+`adding_playlist_tracks`, `matching_artists`, `following_artists`, and
+`saving_liked_tracks`, followed by a terminal status.
 
 The import itself performs these steps:
 
 1. Load or refresh each encrypted provider token.
-2. Read the selected Spotify playlist metadata and followed artists.
-3. Create empty TIDAL playlists with the source visibility mapping.
-4. Search TIDAL for exact artist-name matches and follow matches in batches of
+2. Read the selected Spotify playlist metadata, tracks, Liked Songs, and
+   followed artists. Spotify's `user-library-read` permission is required to
+   read Liked Songs.
+3. Create TIDAL playlists with the source visibility mapping.
+4. Resolve Spotify track ISRCs against TIDAL in batches of at most 50, then add
+   exact matches to the corresponding TIDAL playlist or the user's TIDAL
+   collection.
+5. Search TIDAL for exact artist-name matches and follow matches in batches of
    at most 50.
-5. Persist progress and a completed, partial, or failed `music_import_runs` row.
+6. Persist progress and a completed, partial, or failed `music_import_runs` row.
 
 TIDAL write requests use an import-run-specific idempotency key. The database
 also permits only one queued or running import per Hamrah user.
@@ -87,24 +98,30 @@ TIDAL connections request `playlists.write`, `collection.write`, `search.read`,
 and `user.read`. Existing TIDAL connections must be reconnected after a scope
 change.
 
+Spotify connections request `user-library-read` in addition to playlist and
+artist-read permissions. Existing Spotify connections must be reconnected once
+before an import can include Liked Songs.
+
 ## Manual integration check
 
 Use an allowlisted Spotify development-mode account and a TIDAL test account.
 
 1. In Hamrah Settings, connect (or reconnect) Spotify and TIDAL.
-2. Create one public and one non-public Spotify playlist; add a followed artist
-   with an unambiguous TIDAL name.
-3. Start an import without saved playlists, then verify two empty TIDAL
-   playlists with the correct public/unlisted visibility and the matched TIDAL
-   artist follow.
+2. Create one public and one non-public Spotify playlist, each containing a
+   track available in TIDAL; like one additional Spotify track; and add a
+   followed artist with an unambiguous TIDAL name.
+3. Start an import without saved playlists, then verify two TIDAL playlists
+   with the correct public/unlisted visibility, the exact track
+   matches in each playlist, the Liked Song saved to the TIDAL collection, and
+   the matched TIDAL artist follow.
 4. Save another Spotify playlist, repeat with the saved-playlists option, and
-   verify that its empty playlist is created.
-5. Verify no tracks or playlist items were copied and that unmatched artists
-   appear in the import's `unmatched_items` count.
+   verify that its playlist and exact tracks are created.
+5. Verify a track with no TIDAL ISRC match is not copied and increases the
+   import's `unmatched_items` count.
 
 ## Deliberately not implemented
 
-This is an import, not a recurring sync. It does not transfer tracks, delete
-destination data, export TIDAL data, make heuristic artist matches, or run a
-background job. If imports outgrow the request timeout, add a durable job
-runner that preserves the same per-collection progress before increasing scope.
+This is an import, not a recurring sync. It does not delete destination data,
+export TIDAL data, make heuristic track or artist matches, or run a background
+job. If imports outgrow the request timeout, add a durable job runner that
+preserves the same per-collection progress before increasing scope.
