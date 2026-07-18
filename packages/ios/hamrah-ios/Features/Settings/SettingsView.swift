@@ -49,6 +49,7 @@ struct SettingsView: View {
     @State private var musicConnections: [MusicConnectionDTO] = []
     @State private var isLoadingMusic = false
     @State private var includeSavedMusicPlaylists = false
+    @State private var includeSavedMusicTracks = false
     @State private var musicImports: [MusicImportDTO] = []
 
     private var availableModelIds: [String] {
@@ -393,6 +394,13 @@ struct SettingsView: View {
 
             Toggle("Also import saved Spotify playlists", isOn: $includeSavedMusicPlaylists)
                 .disabled(latestMusicImport?.isActive == true || latestMusicImport?.canRestart == true)
+            Toggle("Also import Spotify Liked Songs", isOn: $includeSavedMusicTracks)
+                .disabled(latestMusicImport?.isActive == true || latestMusicImport?.canRestart == true)
+            if includeSavedMusicTracks {
+                Text("Spotify will ask for permission to read your Liked Songs. Reconnect Spotify if requested.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Button(musicImportActionTitle) {
                 Task { await beginOrRestartMusicImport() }
             }
@@ -450,7 +458,9 @@ struct SettingsView: View {
             }
         } else {
             await performMusicImport {
-                try await musicSyncAPI.startImport(includeSavedPlaylists: includeSavedMusicPlaylists)
+                try await musicSyncAPI.startImport(
+                    includeSavedPlaylists: includeSavedMusicPlaylists,
+                    includeSavedTracks: includeSavedMusicTracks)
             }
         }
     }
@@ -475,8 +485,8 @@ struct SettingsView: View {
             await loadMusicImports(showErrorOnFailure: false)
             if latestMusicImport?.isActive == true {
                 infoMessage = "A music import is already running. Its live status is shown below."
-            } else if latestMusicImport?.canRestart == true {
-                infoMessage = "Restart the incomplete import to safely reuse its original TIDAL idempotency keys."
+            } else if let recoveryMessage = latestMusicImport?.recoveryMessage {
+                errorMessage = recoveryMessage
             } else {
                 errorMessage = "Failed to start music import: \(error.localizedDescription)"
             }

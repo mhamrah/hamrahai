@@ -14,6 +14,10 @@ const isActiveImport = (run: MusicImportWire) =>
 const canRestartImport = (run: MusicImportWire) =>
   run.status === "failed" || run.status === "partial";
 
+export const failedImportMessage = (run: MusicImportWire) =>
+  run.error ??
+  "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.";
+
 const importStage = (run: MusicImportWire) => {
   switch (run.stage) {
     case "queued":
@@ -51,6 +55,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
   const imports = useSignal(props.initialImports);
   const error = useSignal<string | undefined>(props.initialError);
   const includeSaved = useSignal(false);
+  const includeSavedTracks = useSignal(false);
   const isImporting = useSignal(false);
 
   // eslint-disable-next-line qwik/no-use-visible-task -- Polling must run in the signed-in browser session.
@@ -104,7 +109,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         include_owned_playlists: true,
         include_saved_playlists: includeSaved.value,
         include_followed_artists: true,
-        include_saved_tracks: true,
+        include_saved_tracks: includeSavedTracks.value,
       });
       imports.value = [run, ...imports.value];
     } catch (cause) {
@@ -114,8 +119,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         imports.value = currentImports;
         if (currentImports[0] && isActiveImport(currentImports[0])) return;
         if (currentImports[0] && canRestartImport(currentImports[0])) {
-          error.value =
-            "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.";
+          error.value = failedImportMessage(currentImports[0]);
           return;
         }
       } catch {
@@ -229,6 +233,29 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         />
         Also import playlists saved in my Spotify library
       </label>
+      <label class="mt-3 flex items-center gap-2 text-sm text-gray-700">
+        <input
+          type="checkbox"
+          checked={includeSavedTracks.value}
+          disabled={Boolean(
+            imports.value[0] &&
+            (isActiveImport(imports.value[0]) ||
+              canRestartImport(imports.value[0])),
+          )}
+          onChange$={(event) => {
+            includeSavedTracks.value = (
+              event.target as HTMLInputElement
+            ).checked;
+          }}
+        />
+        Also import Spotify Liked Songs
+      </label>
+      {includeSavedTracks.value && (
+        <p class="mt-2 text-sm text-gray-600">
+          Spotify will ask for permission to read your Liked Songs. Reconnect
+          Spotify if requested.
+        </p>
+      )}
       <button
         class="mt-4 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
         disabled={

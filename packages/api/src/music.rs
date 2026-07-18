@@ -94,7 +94,7 @@ pub struct CreateImportRequest {
     pub include_saved_playlists: bool,
     #[serde(default = "default_true")]
     pub include_followed_artists: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub include_saved_tracks: bool,
 }
 fn default_true() -> bool {
@@ -462,7 +462,7 @@ async fn provider_account_id(provider: &str, access_token: &str) -> Option<Strin
         "tidal" => client
             .get("https://openapi.tidal.com/v2/users/me")
             .bearer_auth(access_token)
-            .header("accept", "application/vnd.api+json")
+            .header("accept", "application/vnd.tidal.v1+json")
             .send()
             .await
             .ok()?
@@ -685,11 +685,37 @@ async fn run_import(
 
     let (status, outcome, mut progress, import_error) = match result {
         Ok((outcome, progress)) if outcome.unmatched_items == 0 => {
+            tracing::info!(
+                %import_id,
+                stage = progress.stage,
+                total_items = outcome.total_items,
+                imported_items = outcome.imported_items,
+                "music import completed"
+            );
             ("completed", outcome, progress, None)
         }
-        Ok((outcome, progress)) => ("partial", outcome, progress, None),
+        Ok((outcome, progress)) => {
+            tracing::warn!(
+                %import_id,
+                stage = progress.stage,
+                total_items = outcome.total_items,
+                imported_items = outcome.imported_items,
+                unmatched_items = outcome.unmatched_items,
+                warning = ?outcome.warning,
+                "music import completed partially"
+            );
+            let import_error = outcome.warning.clone();
+            ("partial", outcome, progress, import_error)
+        }
         Err(failure) => {
-            tracing::warn!(error = %failure.message, %import_id, "music import failed");
+            tracing::warn!(
+                error = %failure.message,
+                %import_id,
+                stage = failure.progress.stage,
+                imported_items = failure.outcome.imported_items,
+                unmatched_items = failure.outcome.unmatched_items,
+                "music import failed"
+            );
             let import_error = if failure
                 .message
                 .starts_with("TIDAL is temporarily rate limiting")
@@ -911,5 +937,15 @@ mod tests {
         assert!(is_retryable_import_status("partial"));
         assert!(!is_retryable_import_status("running"));
         assert!(!is_retryable_import_status("completed"));
+    }
+    #[test]
+    fn imports_do_not_request_liked_songs_unless_selected() {
+        let request =
+            serde_json::from_str::<CreateImportRequest>(r#"{"include_owned_playlists":true}"#)
+                .unwrap();
+
+        assert!(request.include_owned_playlists);
+        assert!(request.include_followed_artists);
+        assert!(!request.include_saved_tracks);
     }
 }

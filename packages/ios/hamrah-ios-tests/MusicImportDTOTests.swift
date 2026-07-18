@@ -65,6 +65,18 @@ struct MusicImportDTOTests {
         #expect(!makeImport(status: "completed", stage: "completed").canRestart)
     }
 
+    @Test
+    func recoveryMessagePrefersTheServerProvidedReason() {
+        let importWithScopeError = makeImport(
+            status: "failed",
+            stage: "failed",
+            error: "Spotify authorization needs user-library-read; reconnect Spotify to continue"
+        )
+
+        #expect(importWithScopeError.recoveryMessage == "Spotify authorization needs user-library-read; reconnect Spotify to continue")
+        #expect(makeImport(status: "failed", stage: "failed").recoveryMessage == "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.")
+    }
+
     private func makeImport(
         status: String = "running",
         stage: String,
@@ -77,7 +89,8 @@ struct MusicImportDTOTests {
         playlistTrackTotal: Int = 0,
         playlistTracksImported: Int = 0,
         savedTrackTotal: Int = 0,
-        savedTracksImported: Int = 0
+        savedTracksImported: Int = 0,
+        error: String? = nil
     ) -> MusicImportDTO {
         MusicImportDTO(
             id: "import-1",
@@ -101,7 +114,7 @@ struct MusicImportDTOTests {
             saved_track_total: savedTrackTotal,
             saved_tracks_imported: savedTracksImported,
             tracks_matched: playlistTracksImported + savedTracksImported,
-            error: nil,
+            error: error,
             created_at: "2026-07-17T00:00:00Z"
         )
     }
