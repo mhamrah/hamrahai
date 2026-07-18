@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  buildAppleNativeAuthRequest,
   buildGoogleNativeAuthRequest,
   verifyGoogleToken,
   verifyAppleToken,
@@ -32,6 +33,15 @@ describe("OAuth Provider Token Verification", () => {
       provider: "google",
       credential: "signed-google-id-token",
       auth_method: "google",
+      platform: "web",
+    });
+  });
+
+  it("passes the Apple ID token to the API authentication boundary", () => {
+    expect(buildAppleNativeAuthRequest("signed-apple-id-token")).toEqual({
+      provider: "apple",
+      credential: "signed-apple-id-token",
+      auth_method: "apple",
       platform: "web",
     });
   });

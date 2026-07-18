@@ -10,6 +10,15 @@ export function buildGoogleNativeAuthRequest(credential: string) {
   };
 }
 
+export function buildAppleNativeAuthRequest(credential: string) {
+  return {
+    provider: "apple" as const,
+    credential,
+    auth_method: "apple",
+    platform: "web" as const,
+  };
+}
+
 export function getGoogleProvider(event: any) {
   const clientId = event.platform.env.GOOGLE_CLIENT_ID;
   const clientSecret = event.platform.env.GOOGLE_CLIENT_SECRET;
