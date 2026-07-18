@@ -113,7 +113,7 @@ export class WebAuthnClient {
       }
 
       const registrationResponse = await startRegistration({
-        optionsJSON: beginResponse.options,
+        optionsJSON: credentialOptions(beginResponse.options) as any,
       });
 
       if (!registrationResponse) {
@@ -199,7 +199,7 @@ export async function authenticateWithDiscoverablePasskey(): Promise<PasskeyAuth
     }
 
     const authResponse = await startAuthentication({
-      optionsJSON: beginResponse.options,
+      optionsJSON: credentialOptions(beginResponse.options) as any,
       useBrowserAutofill: false,
     });
 
