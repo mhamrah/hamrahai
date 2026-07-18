@@ -56,6 +56,14 @@ jobs:
       - name: Set Neon branch expiration
         run: echo "NEON_EXPIRES_AT=$(date -u -d '+1 day' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
+      - name: Set up Node.js for Neon CLI
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install Neon CLI
+        run: npm install --global --ignore-scripts neonctl@2.22.0
+
       - name: Create Neon release validation branch
         id: neon
         uses: neondatabase/create-branch-action@v6
@@ -139,8 +147,8 @@ jobs:
 
       - name: Delete Neon release validation branch
         if: always() && steps.neon.outputs.branch_id != ''
-        uses: neondatabase/delete-branch-action@v3.2.1
-        with:
-          project_id: ${{ vars.NEON_PROJECT_ID }}
-          branch: ${{ steps.neon.outputs.branch_id }}
-          api_key: ${{ secrets.NEON_API_KEY }}
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_BRANCH_ID: ${{ steps.neon.outputs.branch_id }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+        run: neonctl branches delete "$NEON_BRANCH_ID" --project-id "$NEON_PROJECT_ID"
