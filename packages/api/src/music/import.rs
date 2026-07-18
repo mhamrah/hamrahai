@@ -14,10 +14,11 @@ use super::query_value;
 
 const SPOTIFY_API_BASE: &str = "https://api.spotify.com";
 const TIDAL_API_BASE: &str = "https://openapi.tidal.com/v2";
-const TIDAL_MEDIA_TYPE: &str = "application/vnd.api+json";
+const TIDAL_MEDIA_TYPE: &str = "application/vnd.tidal.v1+json";
 const TIDAL_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const TIDAL_RATE_LIMIT_RETRIES: u8 = 3;
 const TIDAL_ISRC_FILTER_LIMIT: usize = 20;
+const TIDAL_DUPLICATE_COLLECTION_ITEMS: &str = "DUPLICATE_ITEMS_IN_COLLECTION";
 const INACCESSIBLE_SPOTIFY_PLAYLIST_WARNING: &str = "Some Spotify playlists could not be read. Check that you own or collaborate on them, then restart to retry safely.";
 
 static TIDAL_NEXT_REQUEST_AT: OnceLock<Mutex<Instant>> = OnceLock::new();
@@ -323,6 +324,46 @@ impl HttpMusicImportProvider {
             unmatched_items: skipped,
         })
     }
+
+    async fn save_tidal_tracks_allowing_existing(
+        &self,
+        track_ids: &[String],
+        idempotency_key: String,
+    ) -> Result<TrackWriteOutcome, String> {
+        let url = format!(
+            "{}/userCollectionTracks/me/relationships/items",
+            self.tidal_api_base
+        );
+        let mut pending = vec![(track_ids.to_vec(), idempotency_key)];
+        let mut outcome = TrackWriteOutcome::default();
+        while let Some((track_ids, idempotency_key)) = pending.pop() {
+            match self
+                .tidal_add_tracks(url.clone(), &track_ids, idempotency_key.clone(), None)
+                .await
+            {
+                Ok(result) => {
+                    outcome.imported_items += result.imported_items;
+                    outcome.unmatched_items += result.unmatched_items;
+                }
+                Err(error)
+                    if error.contains(TIDAL_DUPLICATE_COLLECTION_ITEMS) && track_ids.len() == 1 => {
+                }
+                Err(error) if error.contains(TIDAL_DUPLICATE_COLLECTION_ITEMS) => {
+                    let split_at = track_ids.len() / 2;
+                    pending.push((
+                        track_ids[split_at..].to_vec(),
+                        format!("{idempotency_key}:right"),
+                    ));
+                    pending.push((
+                        track_ids[..split_at].to_vec(),
+                        format!("{idempotency_key}:left"),
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(outcome)
+    }
 }
 
 async fn provider_http_error(provider: &str, response: Response) -> String {
@@ -521,16 +562,8 @@ impl MusicImportProvider for HttpMusicImportProvider {
         track_ids: &[String],
         idempotency_key: String,
     ) -> Result<TrackWriteOutcome, String> {
-        self.tidal_add_tracks(
-            format!(
-                "{}/userCollectionTracks/me/relationships/items",
-                self.tidal_api_base
-            ),
-            track_ids,
-            idempotency_key,
-            None,
-        )
-        .await
+        self.save_tidal_tracks_allowing_existing(track_ids, idempotency_key)
+            .await
     }
 
     async fn find_tidal_artist(&self, name: &str) -> Result<Option<String>, String> {
@@ -1576,12 +1609,12 @@ mod tests {
             *media_types.lock().unwrap(),
             vec![
                 (
-                    "application/vnd.api+json".to_string(),
-                    "application/vnd.api+json".to_string(),
+                    "application/vnd.tidal.v1+json".to_string(),
+                    "application/vnd.tidal.v1+json".to_string(),
                 ),
                 (
-                    "application/vnd.api+json".to_string(),
-                    "application/vnd.api+json".to_string(),
+                    "application/vnd.tidal.v1+json".to_string(),
+                    "application/vnd.tidal.v1+json".to_string(),
                 ),
             ]
         );
@@ -1635,6 +1668,69 @@ mod tests {
                     { "type": "tracks", "id": "tidal-track-b" },
                 ],
             })]
+        );
+    }
+
+    #[tokio::test]
+    async fn saves_non_duplicate_liked_tracks_when_tidal_rejects_a_mixed_batch() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().route(
+            "/userCollectionTracks/me/relationships/items",
+            post({
+                let requests = Arc::clone(&requests);
+                move |body: String| {
+                    let requests = Arc::clone(&requests);
+                    async move {
+                        let body = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+                        let ids = body["data"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|item| item["id"].as_str().unwrap().to_string())
+                            .collect::<Vec<_>>();
+                        requests.lock().unwrap().push(ids.clone());
+                        if ids.iter().any(|id| id == "already-favorited") {
+                            (
+                                StatusCode::CONFLICT,
+                                [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                                r#"{"errors":[{"code":"DUPLICATE_ITEMS_IN_COLLECTION","detail":"already favorited"}]}"#,
+                            )
+                                .into_response()
+                        } else {
+                            (
+                                StatusCode::OK,
+                                [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                                r#"{"data":[],"meta":{"skipped":[]}}"#,
+                            )
+                                .into_response()
+                        }
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+
+        let result = provider
+            .save_tidal_tracks(
+                &["already-favorited".to_string(), "new-favorite".to_string()],
+                "stable-idempotency-key".to_string(),
+            )
+            .await
+            .unwrap();
+
+        server.abort();
+        assert_eq!(result.imported_items, 1);
+        assert_eq!(result.unmatched_items, 0);
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![
+                vec!["already-favorited".to_string(), "new-favorite".to_string()],
+                vec!["already-favorited".to_string()],
+                vec!["new-favorite".to_string()],
+            ]
         );
     }
 
