@@ -215,6 +215,11 @@ async fn http_music_connections_accept_a_valid_web_session() -> anyhow::Result<(
     let user = upsert_user(&pool, &user_email, Some("Music Session Test")).await?;
     let raw_session = Uuid::new_v4().to_string();
     create_session(&pool, user.id, &raw_session, 6).await?;
+    sqlx::query("INSERT INTO music_connections (id,user_id,provider,provider_account_id,provider_account_name,status) VALUES ($1,$2,'spotify','spotify-user-id','Spotify Display Name','connected')")
+        .bind(Uuid::new_v4())
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
 
     let req = Request::builder()
         .method("GET")
@@ -228,7 +233,13 @@ async fn http_music_connections_accept_a_valid_web_session() -> anyhow::Result<(
 
     let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let connections: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(connections.is_empty());
+    assert_eq!(connections.len(), 1);
+    assert_eq!(connections[0]["provider"], "spotify");
+    assert_eq!(connections[0]["provider_account_id"], "spotify-user-id");
+    assert_eq!(
+        connections[0]["provider_account_name"],
+        "Spotify Display Name"
+    );
 
     Ok(())
 }
@@ -276,6 +287,11 @@ async fn http_music_connection_begin_accepts_a_valid_web_session() -> anyhow::Re
         response["authorization_url"]
             .as_str()
             .is_some_and(|url| url.starts_with("https://accounts.spotify.com/authorize?"))
+    );
+    assert!(
+        response["authorization_url"]
+            .as_str()
+            .is_some_and(|url| url.contains("show_dialog=true"))
     );
 
     Ok(())
@@ -326,6 +342,7 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
     let import_id = import_id.to_string();
     assert_eq!(response["id"].as_str(), Some(import_id.as_str()));
     assert_eq!(response["status"], "failed");
+    assert_eq!(response["stage"], "preparing");
     assert_eq!(response["include_saved_playlists"], true);
     assert_eq!(response["include_saved_tracks"], true);
 

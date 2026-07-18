@@ -10,14 +10,32 @@ function musicSyncError(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to load music sync.";
 }
 
+function musicConnectionCallbackError(url: URL): string | undefined {
+  const reason = url.searchParams.get("music_connection_error");
+  if (!reason) return undefined;
+  const provider =
+    url.searchParams.get("music_provider") === "tidal" ? "TIDAL" : "Spotify";
+  switch (reason) {
+    case "declined":
+      return `${provider} connection was canceled. No account was changed.`;
+    case "authorization_failed":
+      return `${provider} did not complete authorization. Try connecting again.`;
+    case "account_verification_failed":
+      return `Hamrah could not verify which ${provider} account was authorized, so the previous connection was left unchanged. Try connecting again.`;
+    default:
+      return `Unable to connect ${provider}. Try again.`;
+  }
+}
+
 export const useMusicSyncLoader = routeLoader$(async (event) => {
   const client = createApiClient(event);
+  const callbackError = musicConnectionCallbackError(event.url);
   try {
     const [connections, imports] = await Promise.all([
       client.get<MusicConnectionWire[]>("/v1/music/connections"),
       client.get<MusicImportWire[]>("/v1/music/imports"),
     ]);
-    return { connections, imports, error: undefined };
+    return { connections, imports, error: callbackError };
   } catch (error) {
     return {
       connections: [],

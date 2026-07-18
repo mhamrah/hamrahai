@@ -145,6 +145,9 @@ Text("Title")
 - **100% coverage** for all Core services and managers
 - **Test offline scenarios** and sync conflicts
 - **Mock all API dependencies** for reliable testing
+- Before changing a user workflow, inspect the matching web implementation and shared API contract. Native-only completion is valid only when the sibling client is verified unaffected and that evidence is recorded in the PR.
+- Test changed controls through their state transition and verify the domain API receives the selected snake_case request values. A DTO or computed-property test alone is not sufficient when the defect crossed the view/API boundary.
+- Verify both iOS and macOS compilation for shared Settings or feature code, plus loading, retry, disabled-state, Dynamic Type, and accessibility behavior.
 
 ### Test Structure
 ```swift

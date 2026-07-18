@@ -166,4 +166,17 @@ describe("HamrahApiClient", () => {
       status: 401,
     } satisfies Partial<ApiClientError>);
   });
+
+  it("accepts an empty 204 response when disconnecting a provider", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      json: vi.fn(),
+    });
+    const client = new HamrahApiClient(undefined, "https://api.hamrah.app");
+
+    await expect(
+      client.delete("/v1/music/connections/spotify"),
+    ).resolves.toBeUndefined();
+  });
 });

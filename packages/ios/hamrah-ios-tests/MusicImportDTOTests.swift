@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import hamrah_ios
 
@@ -66,6 +67,29 @@ struct MusicImportDTOTests {
     }
 
     @Test
+    func importOptionsRemainEditableForFailedAndPartialRetries() {
+        #expect(makeImport(status: "failed", stage: "failed").importOptionsAreEditable)
+        #expect(makeImport(status: "partial", stage: "completed").importOptionsAreEditable)
+        #expect(!makeImport(status: "running", stage: "reading_spotify").importOptionsAreEditable)
+    }
+
+    @Test
+    @MainActor
+    func retryOptionsEncodeUsingTheSharedSnakeCaseContract() throws {
+        let options = MusicImportRequestDTO(
+            include_owned_playlists: true,
+            include_saved_playlists: true,
+            include_followed_artists: true,
+            include_saved_tracks: true
+        )
+
+        let data = try JSONEncoder().encode(options)
+        let decoded = try JSONDecoder().decode(MusicImportRequestDTO.self, from: data)
+
+        #expect(decoded == options)
+    }
+
+    @Test
     func recoveryMessagePrefersTheServerProvidedReason() {
         let importWithScopeError = makeImport(
             status: "failed",
@@ -75,6 +99,17 @@ struct MusicImportDTOTests {
 
         #expect(importWithScopeError.recoveryMessage == "Spotify authorization needs user-library-read; reconnect Spotify to continue")
         #expect(makeImport(status: "failed", stage: "failed").recoveryMessage == "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.")
+    }
+
+    @Test
+    func failedImportNamesTheProviderOperationAndReference() {
+        let musicImport = makeImport(
+            status: "failed",
+            stage: "adding_playlist_tracks"
+        )
+
+        #expect(musicImport.stageDescription == "Import failed while matching or adding playlist tracks")
+        #expect(musicImport.shortReference == "import-1")
     }
 
     private func makeImport(

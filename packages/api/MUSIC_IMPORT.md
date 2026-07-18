@@ -53,7 +53,8 @@ The import itself performs these steps:
 3. Create TIDAL playlists with the source visibility mapping.
 4. Resolve Spotify track ISRCs against TIDAL in batches of at most 50, then add
    exact matches to the corresponding TIDAL playlist or the user's TIDAL
-   collection.
+   collection. TIDAL's array filter is encoded as one repeated
+   `filter[isrc]` query parameter per ISRC.
 5. Search TIDAL for exact artist-name matches and follow matches in batches of
    at most 50.
 6. Persist progress and a completed, partial, or failed `music_import_runs` row.
@@ -76,6 +77,18 @@ If an import fails or completes partially, clients show a retry action. Retrying
 reuses the original import run and its TIDAL idempotency keys, rather than
 creating a second run. This safely replays incomplete work without creating a
 duplicate TIDAL playlist or artist relationship.
+
+Failure responses retain the provider operation that failed and a short import
+reference that can be matched to structured Cloud Run logs. Clients must not
+tell users to reconnect both providers for a provider request-shape or service
+failure. Reconnection guidance is reserved for an account, scope, or token
+error.
+
+OAuth completion verifies the provider's current-user endpoint before replacing
+a stored connection. The verified provider ID and display name/username are
+stored together and shown by both clients. A failed identity lookup leaves the
+previous connection unchanged, preventing a new token from being displayed
+with a stale account ID.
 
 The API updates a progress heartbeat whenever it persists import progress. A
 run that stops reporting for five minutes is marked failed with a restartable

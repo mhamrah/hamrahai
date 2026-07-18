@@ -21,7 +21,24 @@ export const failedImportMessage = (run: MusicImportWire) =>
 export const musicImportOptionsDisabled = (run?: MusicImportWire) =>
   Boolean(run && isActiveImport(run));
 
-const importStage = (run: MusicImportWire) => {
+export const importStage = (run: MusicImportWire) => {
+  if (run.status === "failed") {
+    switch (run.stage) {
+      case "reading_spotify":
+        return "Import failed while reading Spotify";
+      case "creating_playlists":
+        return "Import failed while creating TIDAL playlists";
+      case "adding_playlist_tracks":
+        return "Import failed while matching or adding playlist tracks";
+      case "matching_artists":
+      case "following_artists":
+        return "Import failed while matching or following artists";
+      case "saving_liked_tracks":
+        return "Import failed while saving Liked Songs";
+      default:
+        return "Import failed";
+    }
+  }
   switch (run.stage) {
     case "queued":
     case "preparing":
@@ -96,6 +113,21 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         cause instanceof Error
           ? cause.message
           : `Unable to connect ${provider}.`;
+    }
+  });
+
+  const disconnect = $(async (provider: MusicProvider) => {
+    error.value = undefined;
+    try {
+      await createApiClient().delete(`/v1/music/connections/${provider}`);
+      connections.value = connections.value.filter(
+        (connection) => connection.provider !== provider,
+      );
+    } catch (cause) {
+      error.value =
+        cause instanceof Error
+          ? cause.message
+          : `Unable to disconnect ${provider}.`;
     }
   });
 
@@ -184,6 +216,11 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
       (connection) =>
         connection.provider === provider && connection.status === "connected",
     )?.provider_account_id;
+  const accountName = (provider: MusicProvider) =>
+    connections.value.find(
+      (connection) =>
+        connection.provider === provider && connection.status === "connected",
+    )?.provider_account_name;
 
   return (
     <section class="mt-6 border-t border-gray-200 pt-6">
@@ -202,23 +239,39 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         {providers.map((provider) => (
           <div
             key={provider}
-            class="flex items-center justify-between rounded-lg border border-gray-200 p-4"
+            class="flex flex-col gap-3 rounded-lg border border-gray-200 p-4 sm:flex-row sm:items-center sm:justify-between"
           >
             <span class="font-medium capitalize text-gray-950">{provider}</span>
             {connected(provider) ? (
-              <div class="flex items-center gap-3">
-                <div class="text-right">
+              <div class="flex min-w-0 items-center justify-between gap-3 sm:justify-end">
+                <div class="min-w-0 text-left sm:text-right">
                   <p class="text-sm text-emerald-700">Connected</p>
+                  {accountName(provider) && (
+                    <p class="truncate text-sm font-medium text-gray-800">
+                      {accountName(provider)}
+                    </p>
+                  )}
                   {accountId(provider) && (
-                    <p class="text-xs text-gray-500">{accountId(provider)}</p>
+                    <p class="text-xs text-gray-500">
+                      {provider === "spotify" ? "Spotify" : "TIDAL"} ID:{" "}
+                      {accountId(provider)}
+                    </p>
                   )}
                 </div>
-                <button
-                  class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold"
-                  onClick$={() => connect(provider)}
-                >
-                  Reconnect
-                </button>
+                <div class="flex shrink-0 flex-col gap-1">
+                  <button
+                    class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold"
+                    onClick$={() => connect(provider)}
+                  >
+                    Change account
+                  </button>
+                  <button
+                    class="px-3 py-1 text-xs font-medium text-red-700"
+                    onClick$={() => disconnect(provider)}
+                  >
+                    Disconnect
+                  </button>
+                </div>
               </div>
             ) : (
               <button
@@ -312,6 +365,9 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
           {imports.value[0].error && (
             <p class="mt-1 text-red-700">{imports.value[0].error}</p>
           )}
+          <p class="mt-1 text-xs text-gray-500">
+            Import reference: {imports.value[0].id.slice(0, 8)}
+          </p>
         </div>
       )}
     </section>

@@ -224,17 +224,17 @@ impl HttpMusicImportProvider {
     }
 
     async fn spotify_get<T: for<'de> Deserialize<'de>>(&self, url: String) -> Result<T, String> {
-        self.client
+        let response = self
+            .client
             .get(url)
             .bearer_auth(&self.spotify_access_token)
             .send()
             .await
-            .map_err(|error| error.to_string())?
-            .error_for_status()
-            .map_err(|error| error.to_string())?
-            .json()
-            .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(provider_http_error("Spotify", response).await);
+        }
+        response.json().await.map_err(|error| error.to_string())
     }
 
     async fn tidal_get<T: for<'de> Deserialize<'de>>(&self, url: String) -> Result<T, String> {
@@ -258,9 +258,11 @@ impl HttpMusicImportProvider {
             wait_for_tidal_request_slot().await;
             let response = request().send().await.map_err(|error| error.to_string())?;
             if response.status() != StatusCode::TOO_MANY_REQUESTS {
-                return response
-                    .error_for_status()
-                    .map_err(|error| error.to_string());
+                return if response.status().is_success() {
+                    Ok(response)
+                } else {
+                    Err(provider_http_error("TIDAL", response).await)
+                };
             }
 
             if retry == TIDAL_RATE_LIMIT_RETRIES {
@@ -319,6 +321,38 @@ impl HttpMusicImportProvider {
             imported_items: track_ids.len() as i32 - skipped,
             unmatched_items: skipped,
         })
+    }
+}
+
+async fn provider_http_error(provider: &str, response: Response) -> String {
+    let status = response.status();
+    let path = response.url().path().to_string();
+    let detail = response
+        .text()
+        .await
+        .ok()
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+        .and_then(|body| {
+            body.get("errors")
+                .and_then(|errors| errors.as_array())
+                .and_then(|errors| errors.first())
+                .and_then(|error| {
+                    let code = error.get("code").and_then(|value| value.as_str());
+                    let detail = error
+                        .get("detail")
+                        .or_else(|| error.get("message"))
+                        .and_then(|value| value.as_str());
+                    match (code, detail) {
+                        (Some(code), Some(detail)) => Some(format!("{code}: {detail}")),
+                        (Some(code), None) => Some(code.to_string()),
+                        (None, Some(detail)) => Some(detail.to_string()),
+                        (None, None) => None,
+                    }
+                })
+        });
+    match detail {
+        Some(detail) => format!("{provider} returned {status} for {path}: {detail}"),
+        None => format!("{provider} returned {status} for {path}"),
     }
 }
 
@@ -445,10 +479,11 @@ impl MusicImportProvider for HttpMusicImportProvider {
         if isrcs.is_empty() {
             return Ok(HashMap::new());
         }
-        let query = format!("filter%5Bisrc%5D={}", query_value(&isrcs.join(",")));
-        let response: TidalTracksResponse = self
-            .tidal_get(format!("{}/tracks?{query}", self.tidal_api_base))
-            .await?;
+        let mut url = reqwest::Url::parse(&format!("{}/tracks", self.tidal_api_base))
+            .map_err(|error| error.to_string())?;
+        url.query_pairs_mut()
+            .extend_pairs(isrcs.iter().map(|isrc| ("filter[isrc]", isrc)));
+        let response: TidalTracksResponse = self.tidal_get(url.to_string()).await?;
         Ok(response
             .data
             .into_iter()
@@ -1604,7 +1639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn looks_up_all_isrcs_with_one_comma_delimited_filter() {
+    async fn looks_up_all_isrcs_with_repeated_array_filters() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new().route(
             "/tracks",
@@ -1646,7 +1681,7 @@ mod tests {
         assert_eq!(
             *requests.lock().unwrap(),
             vec![(
-                "filter%5Bisrc%5D=US-AAA-01%2CUS-BBB-02".to_string(),
+                "filter%5Bisrc%5D=US-AAA-01&filter%5Bisrc%5D=US-BBB-02".to_string(),
                 TIDAL_MEDIA_TYPE.to_string(),
             )]
         );
@@ -1657,5 +1692,35 @@ mod tests {
                 ("US-BBB-02".to_string(), "tidal-b".to_string()),
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn tidal_errors_keep_safe_provider_detail_without_query_values() {
+        let app = Router::new().route(
+            "/tracks",
+            get(|| async {
+                (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                    r#"{"errors":[{"code":"VALIDATION_ERROR","detail":"filter[isrc] must use repeated values"}]}"#,
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+
+        let error = provider
+            .tidal_tracks_by_isrc(&["SECRET-ISRC".to_string()])
+            .await
+            .unwrap_err();
+
+        server.abort();
+        assert_eq!(
+            error,
+            "TIDAL returned 400 Bad Request for /tracks: VALIDATION_ERROR: filter[isrc] must use repeated values"
+        );
+        assert!(!error.contains("SECRET-ISRC"));
     }
 }
