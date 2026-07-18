@@ -14,7 +14,7 @@ use super::query_value;
 
 const SPOTIFY_API_BASE: &str = "https://api.spotify.com";
 const TIDAL_API_BASE: &str = "https://openapi.tidal.com/v2";
-const TIDAL_MEDIA_TYPE: &str = "application/vnd.tidal.v1+json";
+const TIDAL_MEDIA_TYPE: &str = "application/vnd.api+json";
 const TIDAL_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const TIDAL_RATE_LIMIT_RETRIES: u8 = 3;
 const TIDAL_ISRC_FILTER_LIMIT: usize = 20;
@@ -1609,15 +1609,20 @@ mod tests {
             *media_types.lock().unwrap(),
             vec![
                 (
-                    "application/vnd.tidal.v1+json".to_string(),
-                    "application/vnd.tidal.v1+json".to_string(),
+                    "application/vnd.api+json".to_string(),
+                    "application/vnd.api+json".to_string(),
                 ),
                 (
-                    "application/vnd.tidal.v1+json".to_string(),
-                    "application/vnd.tidal.v1+json".to_string(),
+                    "application/vnd.api+json".to_string(),
+                    "application/vnd.api+json".to_string(),
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn tidal_requests_use_the_json_api_media_type() {
+        assert_eq!(TIDAL_MEDIA_TYPE, "application/vnd.api+json");
     }
 
     #[tokio::test]
