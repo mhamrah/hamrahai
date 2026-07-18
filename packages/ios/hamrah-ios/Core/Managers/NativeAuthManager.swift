@@ -121,6 +121,7 @@ class NativeAuthManager: NSObject, ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var googleSignInStatus =
         GoogleSignInConfigurationValidator.validate()
+    private var pendingProviderLink = false
 
     private var nativePlatformName: String {
         #if os(iOS)
@@ -282,6 +283,7 @@ class NativeAuthManager: NSObject, ObservableObject {
         provider: String,
         credential: String,
         platform: String,
+        linkProvider: Bool = false,
         additionalData: [String: String] = [:]
     ) -> [String: String] {
         var body = [
@@ -290,6 +292,9 @@ class NativeAuthManager: NSObject, ObservableObject {
             "platform": platform,
             "auth_method": provider,
         ]
+        if linkProvider {
+            body["link_provider"] = "true"
+        }
 
         let reservedKeys = Set(body.keys)
         for (key, value) in additionalData where !reservedKeys.contains(key) {
@@ -387,9 +392,10 @@ class NativeAuthManager: NSObject, ObservableObject {
 
     // MARK: - Apple Sign-In
 
-    func signInWithApple() async {
+    func signInWithApple(linkProvider: Bool = false) async {
         isLoading = true
         errorMessage = nil
+        pendingProviderLink = linkProvider
 
         print("🍎 Starting Apple Sign-In...")
 
@@ -416,7 +422,7 @@ class NativeAuthManager: NSObject, ObservableObject {
             print("✅ Google Sign-In configured")
     }
 
-    func signInWithGoogle() async {
+    func signInWithGoogle(linkProvider: Bool = false) async {
         errorMessage = nil
         configureGoogleSignIn()
         guard googleSignInStatus.isAvailable else {
@@ -467,6 +473,7 @@ class NativeAuthManager: NSObject, ObservableObject {
                 try await authenticateWithBackend(
                     provider: "google",
                     credential: idToken,
+                    linkProvider: linkProvider,
                     additionalData: [
                         "email": user.profile?.email ?? "",
                         "name": user.profile?.name ?? "",
@@ -675,12 +682,16 @@ class NativeAuthManager: NSObject, ObservableObject {
     // MARK: - Backend Integration
 
     private func authenticateWithBackend(
-        provider: String, credential: String, additionalData: [String: String] = [:]
+        provider: String,
+        credential: String,
+        linkProvider: Bool = false,
+        additionalData: [String: String] = [:]
     ) async throws {
         let body = Self.backendAuthPayload(
             provider: provider,
             credential: credential,
             platform: nativePlatformName,
+            linkProvider: linkProvider,
             additionalData: additionalData
         )
 
@@ -976,7 +987,10 @@ extension NativeAuthManager: ASAuthorizationControllerDelegate {
 
                     print("🍎 Sending authentication request to backend...")
                     try await authenticateWithBackend(
-                        provider: "apple", credential: tokenString, additionalData: additionalData)
+                        provider: "apple",
+                        credential: tokenString,
+                        linkProvider: pendingProviderLink,
+                        additionalData: additionalData)
                     print("🍎 Backend authentication completed successfully")
                 } else {
                     print("❌ Apple Sign-In: Invalid credential type")
@@ -989,6 +1003,7 @@ extension NativeAuthManager: ASAuthorizationControllerDelegate {
             }
             await MainActor.run {
                 isLoading = false
+                pendingProviderLink = false
             }
             print("🍎 Apple Sign-In flow completed, isLoading set to false")
         }
@@ -1000,6 +1015,7 @@ extension NativeAuthManager: ASAuthorizationControllerDelegate {
         errorMessage = "Apple Sign-In failed: \(error.localizedDescription)"
         print("❌ Apple Sign-In error: \(error)")
         isLoading = false
+        pendingProviderLink = false
     }
 }
 

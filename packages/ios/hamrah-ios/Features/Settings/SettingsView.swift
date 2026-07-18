@@ -186,7 +186,7 @@ struct SettingsView: View {
 
                 if !isAuthProviderLinked("apple", for: user) {
                     Button(action: {
-                        Task { await authManager.signInWithApple() }
+                        Task { await authManager.signInWithApple(linkProvider: true) }
                     }) {
                         HStack {
                             Image(systemName: "applelogo")
@@ -870,7 +870,7 @@ struct SettingsView: View {
             return
         }
         Task {
-            await authManager.signInWithGoogle()
+            await authManager.signInWithGoogle(linkProvider: true)
             await MainActor.run {
                 if let message = authManager.errorMessage {
                     self.errorMessage = message
