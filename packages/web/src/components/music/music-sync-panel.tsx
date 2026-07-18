@@ -18,6 +18,9 @@ export const failedImportMessage = (run: MusicImportWire) =>
   run.error ??
   "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.";
 
+export const musicImportOptionsDisabled = (run?: MusicImportWire) =>
+  Boolean(run && isActiveImport(run));
+
 const importStage = (run: MusicImportWire) => {
   switch (run.stage) {
     case "queued":
@@ -54,8 +57,12 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
   const connections = useSignal(props.initialConnections);
   const imports = useSignal(props.initialImports);
   const error = useSignal<string | undefined>(props.initialError);
-  const includeSaved = useSignal(false);
-  const includeSavedTracks = useSignal(false);
+  const includeSaved = useSignal(
+    props.initialImports[0]?.include_saved_playlists ?? false,
+  );
+  const includeSavedTracks = useSignal(
+    props.initialImports[0]?.include_saved_tracks ?? false,
+  );
   const isImporting = useSignal(false);
 
   // eslint-disable-next-line qwik/no-use-visible-task -- Polling must run in the signed-in browser session.
@@ -147,6 +154,12 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     try {
       const run = await createApiClient().post<MusicImportWire>(
         `/v1/music/imports/${importId}/restart`,
+        {
+          include_owned_playlists: true,
+          include_saved_playlists: includeSaved.value,
+          include_followed_artists: true,
+          include_saved_tracks: includeSavedTracks.value,
+        },
       );
       imports.value = [
         run,
@@ -222,11 +235,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         <input
           type="checkbox"
           checked={includeSaved.value}
-          disabled={Boolean(
-            imports.value[0] &&
-            (isActiveImport(imports.value[0]) ||
-              canRestartImport(imports.value[0])),
-          )}
+          disabled={musicImportOptionsDisabled(imports.value[0])}
           onChange$={(event) => {
             includeSaved.value = (event.target as HTMLInputElement).checked;
           }}
@@ -237,11 +246,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         <input
           type="checkbox"
           checked={includeSavedTracks.value}
-          disabled={Boolean(
-            imports.value[0] &&
-            (isActiveImport(imports.value[0]) ||
-              canRestartImport(imports.value[0])),
-          )}
+          disabled={musicImportOptionsDisabled(imports.value[0])}
           onChange$={(event) => {
             includeSavedTracks.value = (
               event.target as HTMLInputElement
@@ -257,7 +262,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         </p>
       )}
       <button
-        class="mt-4 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        class="mt-4 w-full rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white transition active:scale-[0.99] disabled:cursor-wait disabled:opacity-50 sm:w-auto"
         disabled={
           isImporting.value ||
           Boolean(imports.value[0] && isActiveImport(imports.value[0])) ||

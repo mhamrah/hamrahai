@@ -302,12 +302,21 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
     let req = Request::builder()
         .method("POST")
         .uri(format!("/v1/music/imports/{import_id}/restart"))
+        .header("content-type", "application/json")
         .header(
             "cookie",
             format!("session={raw_session}; csrf_token={csrf_token}"),
         )
         .header("x-csrf-token", csrf_token)
-        .body(Body::empty())
+        .body(Body::from(
+            json!({
+                "include_owned_playlists": true,
+                "include_saved_playlists": true,
+                "include_followed_artists": true,
+                "include_saved_tracks": true,
+            })
+            .to_string(),
+        ))
         .unwrap();
 
     let resp = router.oneshot(req).await.unwrap();
@@ -317,6 +326,8 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
     let import_id = import_id.to_string();
     assert_eq!(response["id"].as_str(), Some(import_id.as_str()));
     assert_eq!(response["status"], "failed");
+    assert_eq!(response["include_saved_playlists"], true);
+    assert_eq!(response["include_saved_tracks"], true);
 
     let run_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM music_import_runs WHERE user_id = $1")

@@ -824,6 +824,7 @@ pub async fn restart_import(
     State(pool): State<DbPool>,
     headers: HeaderMap,
     Path(import_id): Path<Uuid>,
+    request: Option<Json<CreateImportRequest>>,
 ) -> Response {
     let claims = match require_session_or_claims(&pool, &headers).await {
         Ok(value) => value,
@@ -852,9 +853,14 @@ pub async fn restart_import(
             );
         }
     }
-    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET status = 'running', stage = 'preparing', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
+    let requested_options = request.map(|Json(value)| value);
+    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET include_owned_playlists = COALESCE($3, include_owned_playlists), include_saved_playlists = COALESCE($4, include_saved_playlists), include_followed_artists = COALESCE($5, include_followed_artists), include_saved_tracks = COALESCE($6, include_saved_tracks), status = 'running', stage = 'preparing', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
         .bind(import_id)
         .bind(claims.sub)
+        .bind(requested_options.as_ref().map(|value| value.include_owned_playlists))
+        .bind(requested_options.as_ref().map(|value| value.include_saved_playlists))
+        .bind(requested_options.as_ref().map(|value| value.include_followed_artists))
+        .bind(requested_options.as_ref().map(|value| value.include_saved_tracks))
         .fetch_optional(&pool)
         .await
     {
