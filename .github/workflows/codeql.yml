@@ -25,6 +25,8 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
+      javascript_typescript: ${{ steps.filter.outputs.javascript_typescript }}
+      rust: ${{ steps.filter.outputs.rust }}
       swift: ${{ steps.filter.outputs.swift }}
 
     steps:
@@ -32,11 +34,20 @@ jobs:
         id: filter
         with:
           filters: |
+            javascript_typescript:
+              - 'packages/web/**'
+              - 'packages/shared/**'
+            rust:
+              - 'packages/api/**'
             swift:
               - 'packages/ios/**'
 
   javascript-typescript:
     name: Analyze JavaScript/TypeScript
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' ||
+      needs.changes.outputs.javascript_typescript == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -57,6 +68,10 @@ jobs:
 
   rust:
     name: Analyze Rust
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' ||
+      needs.changes.outputs.rust == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
