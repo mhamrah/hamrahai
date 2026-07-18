@@ -5,6 +5,7 @@ import { useUserLoader } from "../layout";
 import { PasskeyManagement } from "~/components/auth/passkey-management";
 import { MusicSyncPanel } from "~/components/music/music-sync-panel";
 import { createApiClient } from "~/lib/auth/api-client";
+import { linkedAuthProviders } from "~/lib/auth/linked-providers";
 
 function musicSyncError(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to load music sync.";
@@ -48,6 +49,7 @@ export const useMusicSyncLoader = routeLoader$(async (event) => {
 export default component$(() => {
   const user = useUserLoader();
   const musicSync = useMusicSyncLoader();
+  const providers = linkedAuthProviders(user.value);
 
   return (
     <div class="min-h-screen">
@@ -132,7 +134,7 @@ export default component$(() => {
                 <div
                   class={[
                     "flex items-center justify-between rounded-lg border p-4",
-                    user.value.provider === "google"
+                    providers.has("google")
                       ? "border-emerald-200 bg-emerald-50"
                       : "border-gray-200 bg-white",
                   ].join(" ")}
@@ -158,12 +160,12 @@ export default component$(() => {
                     </svg>
                     <div>
                       <p class="text-sm font-medium text-gray-950">Google</p>
-                      {user.value.provider === "google" && (
+                      {providers.has("google") && (
                         <p class="text-xs text-emerald-700">Connected</p>
                       )}
                     </div>
                   </div>
-                  {user.value.provider !== "google" && (
+                  {!providers.has("google") && (
                     <a
                       href="/auth/google?redirect=%2Fsettings"
                       class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
@@ -176,7 +178,7 @@ export default component$(() => {
                 <div
                   class={[
                     "flex items-center justify-between rounded-lg border p-4",
-                    user.value.provider === "apple"
+                    providers.has("apple")
                       ? "border-emerald-200 bg-emerald-50"
                       : "border-gray-200 bg-white",
                   ].join(" ")}
@@ -185,7 +187,7 @@ export default component$(() => {
                     <svg
                       class={[
                         "mr-3 h-5 w-5 shrink-0",
-                        user.value.provider === "apple"
+                        providers.has("apple")
                           ? "text-emerald-700"
                           : "text-gray-800",
                       ].join(" ")}
@@ -196,12 +198,12 @@ export default component$(() => {
                     </svg>
                     <div>
                       <p class="text-sm font-medium text-gray-950">Apple</p>
-                      {user.value.provider === "apple" && (
+                      {providers.has("apple") && (
                         <p class="text-xs text-emerald-700">Connected</p>
                       )}
                     </div>
                   </div>
-                  {user.value.provider !== "apple" && (
+                  {!providers.has("apple") && (
                     <a
                       href="/auth/apple?redirect=%2Fsettings"
                       class="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"

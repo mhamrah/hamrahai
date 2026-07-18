@@ -29,6 +29,7 @@ export interface ApiUserWire {
   name?: string | null;
   picture?: string | null;
   provider?: string | null;
+  auth_providers?: string[];
   auth_method?: string | null;
   provider_id?: string | null;
   created_at: string;
