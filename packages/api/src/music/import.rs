@@ -1,13 +1,55 @@
-use std::{collections::HashSet, future::Future};
+use std::{
+    collections::HashSet,
+    future::Future,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
-use reqwest::Client;
+use reqwest::{Client, Response, StatusCode};
 use serde::Deserialize;
+use tokio::{sync::Mutex, time::sleep};
 use uuid::Uuid;
 
 use super::query_value;
 
 const SPOTIFY_API_BASE: &str = "https://api.spotify.com";
 const TIDAL_API_BASE: &str = "https://openapi.tidal.com/v2";
+const TIDAL_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
+const TIDAL_RATE_LIMIT_RETRIES: u8 = 3;
+
+static TIDAL_NEXT_REQUEST_AT: OnceLock<Mutex<Instant>> = OnceLock::new();
+
+fn tidal_next_request_at() -> &'static Mutex<Instant> {
+    TIDAL_NEXT_REQUEST_AT.get_or_init(|| Mutex::new(Instant::now()))
+}
+
+async fn wait_for_tidal_request_slot() {
+    let delay = {
+        let mut next_request_at = tidal_next_request_at().lock().await;
+        let now = Instant::now();
+        let request_at = (*next_request_at).max(now);
+        *next_request_at = request_at + TIDAL_REQUEST_INTERVAL;
+        request_at.saturating_duration_since(now)
+    };
+    if !delay.is_zero() {
+        sleep(delay).await;
+    }
+}
+
+async fn defer_tidal_requests(delay: Duration) {
+    let mut next_request_at = tidal_next_request_at().lock().await;
+    *next_request_at = (*next_request_at).max(Instant::now() + delay);
+}
+
+fn tidal_retry_after(response: &Response, retry: u8) -> Duration {
+    response
+        .headers()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(1_u64 << retry))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SpotifyPlaylist {
@@ -113,6 +155,7 @@ pub(super) struct HttpMusicImportProvider {
     client: Client,
     spotify_access_token: String,
     tidal_access_token: String,
+    tidal_api_base: String,
 }
 
 impl HttpMusicImportProvider {
@@ -121,6 +164,17 @@ impl HttpMusicImportProvider {
             client: Client::new(),
             spotify_access_token,
             tidal_access_token,
+            tidal_api_base: TIDAL_API_BASE.to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_tidal_api_base(tidal_api_base: String) -> Self {
+        Self {
+            client: Client::new(),
+            spotify_access_token: "spotify-access-token".to_string(),
+            tidal_access_token: "tidal-access-token".to_string(),
+            tidal_api_base,
         }
     }
 
@@ -139,18 +193,43 @@ impl HttpMusicImportProvider {
     }
 
     async fn tidal_get<T: for<'de> Deserialize<'de>>(&self, url: String) -> Result<T, String> {
-        self.client
-            .get(url)
-            .bearer_auth(&self.tidal_access_token)
-            .header("accept", "application/vnd.api+json")
-            .send()
-            .await
-            .map_err(|error| error.to_string())?
-            .error_for_status()
-            .map_err(|error| error.to_string())?
-            .json()
-            .await
-            .map_err(|error| error.to_string())
+        self.tidal_request(|| {
+            self.client
+                .get(&url)
+                .bearer_auth(&self.tidal_access_token)
+                .header("accept", "application/vnd.api+json")
+        })
+        .await?
+        .json()
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    async fn tidal_request<F>(&self, request: F) -> Result<Response, String>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        for retry in 0..=TIDAL_RATE_LIMIT_RETRIES {
+            wait_for_tidal_request_slot().await;
+            let response = request().send().await.map_err(|error| error.to_string())?;
+            if response.status() != StatusCode::TOO_MANY_REQUESTS {
+                return response
+                    .error_for_status()
+                    .map_err(|error| error.to_string());
+            }
+
+            if retry == TIDAL_RATE_LIMIT_RETRIES {
+                return Err("TIDAL is temporarily rate limiting imports; please wait and restart this import".to_string());
+            }
+            let delay = tidal_retry_after(&response, retry);
+            tracing::warn!(
+                retry,
+                retry_after_seconds = delay.as_secs(),
+                "TIDAL rate limited music import request"
+            );
+            defer_tidal_requests(delay).await;
+        }
+        unreachable!("rate-limit retry loop always returns")
     }
 }
 
@@ -213,25 +292,24 @@ impl MusicImportProvider for HttpMusicImportProvider {
                 }
             }
         });
-        self.client
-            .post(format!("{TIDAL_API_BASE}/playlists"))
-            .bearer_auth(&self.tidal_access_token)
-            .header("accept", "application/vnd.api+json")
-            .header("content-type", "application/vnd.api+json")
-            .header("idempotency-key", idempotency_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| error.to_string())?
-            .error_for_status()
-            .map_err(|error| error.to_string())?;
+        self.tidal_request(|| {
+            self.client
+                .post(format!("{}/playlists", self.tidal_api_base))
+                .bearer_auth(&self.tidal_access_token)
+                .header("accept", "application/vnd.api+json")
+                .header("content-type", "application/vnd.api+json")
+                .header("idempotency-key", &idempotency_key)
+                .json(&body)
+        })
+        .await?;
         Ok(())
     }
 
     async fn find_tidal_artist(&self, name: &str) -> Result<Option<String>, String> {
         let response: TidalSearchResponse = self
             .tidal_get(format!(
-                "{TIDAL_API_BASE}/searchResults/{}?include=artists",
+                "{}/searchResults/{}?include=artists",
+                self.tidal_api_base,
                 query_value(name)
             ))
             .await?;
@@ -261,20 +339,19 @@ impl MusicImportProvider for HttpMusicImportProvider {
             })).collect::<Vec<_>>(),
         });
         let response: TidalFollowResponse = self
-            .client
-            .post(format!(
-                "{TIDAL_API_BASE}/userCollectionArtists/me/relationships/items"
-            ))
-            .bearer_auth(&self.tidal_access_token)
-            .header("accept", "application/vnd.api+json")
-            .header("content-type", "application/vnd.api+json")
-            .header("idempotency-key", idempotency_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| error.to_string())?
-            .error_for_status()
-            .map_err(|error| error.to_string())?
+            .tidal_request(|| {
+                self.client
+                    .post(format!(
+                        "{}/userCollectionArtists/me/relationships/items",
+                        self.tidal_api_base
+                    ))
+                    .bearer_auth(&self.tidal_access_token)
+                    .header("accept", "application/vnd.api+json")
+                    .header("content-type", "application/vnd.api+json")
+                    .header("idempotency-key", &idempotency_key)
+                    .json(&body)
+            })
+            .await?
             .json()
             .await
             .map_err(|error| error.to_string())?;
@@ -523,9 +600,18 @@ struct TidalSkippedArtist {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use super::*;
+    use axum::{
+        Router,
+        http::{HeaderMap, StatusCode, header},
+        response::IntoResponse,
+        routing::post,
+    };
 
     struct FakeProvider {
         playlists: Vec<SpotifyPlaylist>,
@@ -734,6 +820,59 @@ mod tests {
         assert_ne!(
             idempotency_key(import_id, "playlist:spotify-playlist"),
             idempotency_key(Uuid::new_v4(), "playlist:spotify-playlist")
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_a_rate_limited_tidal_playlist_request_with_the_same_idempotency_key() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().route(
+            "/playlists",
+            post({
+                let attempts = Arc::clone(&attempts);
+                let idempotency_keys = Arc::clone(&idempotency_keys);
+                move |headers: HeaderMap| {
+                    let attempts = Arc::clone(&attempts);
+                    let idempotency_keys = Arc::clone(&idempotency_keys);
+                    async move {
+                        idempotency_keys.lock().unwrap().push(
+                            headers
+                                .get("idempotency-key")
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                        );
+                        if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                            (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "0")])
+                                .into_response()
+                        } else {
+                            StatusCode::CREATED.into_response()
+                        }
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+
+        provider
+            .create_tidal_playlist(
+                &playlist("playlist", "spotify-user", true),
+                TidalPlaylistVisibility::Public,
+                "stable-idempotency-key".to_string(),
+            )
+            .await
+            .unwrap();
+
+        server.abort();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *idempotency_keys.lock().unwrap(),
+            vec!["stable-idempotency-key", "stable-idempotency-key"]
         );
     }
 }

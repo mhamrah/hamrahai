@@ -48,6 +48,11 @@ The import itself performs these steps:
 TIDAL write requests use an import-run-specific idempotency key. The database
 also permits only one queued or running import per Hamrah user.
 
+TIDAL API requests are serialized at one request per second. If TIDAL responds
+with `429 Too Many Requests`, the importer respects its `Retry-After` value
+and retries up to three times; write retries retain the original idempotency
+key.
+
 ## Failures and restart safety
 
 If an import fails or completes partially, clients show a retry action. Retrying
