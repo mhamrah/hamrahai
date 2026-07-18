@@ -25,6 +25,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
+      javascript_typescript: ${{ steps.filter.outputs.javascript_typescript }}
       rust: ${{ steps.filter.outputs.rust }}
       swift: ${{ steps.filter.outputs.swift }}
 
@@ -33,6 +34,8 @@ jobs:
         id: filter
         with:
           filters: |
+            javascript_typescript:
+              - 'packages/web/**'
             rust:
               - 'packages/api/**'
             swift:
@@ -40,6 +43,10 @@ jobs:
 
   javascript-typescript:
     name: Analyze JavaScript/TypeScript
+    needs: changes
+    if: >-
+      always() && (github.event_name != 'pull_request' ||
+      needs.changes.outputs.javascript_typescript == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -135,3 +142,55 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:swift"
+
+  quality-gate:
+    name: CodeQL quality gate
+    needs: [changes, javascript-typescript, rust, swift]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: read
+
+    steps:
+      - name: Verify required CodeQL analyses completed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          JAVASCRIPT_TYPESCRIPT_CHANGED: ${{ needs.changes.outputs.javascript_typescript }}
+          JAVASCRIPT_TYPESCRIPT_RESULT: ${{ needs.javascript-typescript.result }}
+          RUST_CHANGED: ${{ needs.changes.outputs.rust }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          SWIFT_CHANGED: ${{ needs.changes.outputs.swift }}
+          SWIFT_RESULT: ${{ needs.swift.result }}
+        run: |
+          require_success() {
+            local language="$1"
+            local changed="$2"
+            local result="$3"
+
+            if [[ "${EVENT_NAME}" != "pull_request" || "${changed}" == "true" ]]; then
+              if [[ "${result}" != "success" ]]; then
+                echo "${language} CodeQL analysis must succeed (result: ${result:-missing})." >&2
+                exit 1
+              fi
+            fi
+          }
+
+          require_success "JavaScript/TypeScript" "${JAVASCRIPT_TYPESCRIPT_CHANGED}" "${JAVASCRIPT_TYPESCRIPT_RESULT}"
+          require_success "Rust" "${RUST_CHANGED}" "${RUST_RESULT}"
+          require_success "Swift" "${SWIFT_CHANGED}" "${SWIFT_RESULT}"
+
+      - name: Enforce CodeQL alert thresholds
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          violations="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?tool_name=CodeQL&pr=${PR_NUMBER}&state=open&per_page=100" \
+            --jq '.[] | select(.rule.severity == "error" or .rule.security_severity_level == "high" or .rule.security_severity_level == "critical") | "\(.rule.id) (severity: \(.rule.severity), security severity: \(.rule.security_severity_level // "none")) \(.html_url)"')"
+
+          if [[ -n "${violations}" ]]; then
+            echo "CodeQL found pull-request alerts at the protected thresholds:" >&2
+            echo "${violations}" >&2
+            exit 1
+          fi
