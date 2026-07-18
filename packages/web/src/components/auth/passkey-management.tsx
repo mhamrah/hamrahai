@@ -36,6 +36,23 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
   const editingName = useSignal<string>("");
   const isAdding = useSignal(false);
 
+  const loadPasskeys = $(async () => {
+    isLoading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const list = await webauthnClient.getUserPasskeys(props.userId);
+      passkeys.value = list;
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to load passkeys";
+      error.value = msg;
+      await props.onError?.(msg);
+    } finally {
+      isLoading.value = false;
+    }
+  });
+
   const addPasskey = $(async () => {
     error.value = "";
     success.value = "";
@@ -68,23 +85,6 @@ export const PasskeyManagement = component$<PasskeyManagementProps>((props) => {
       error.value = e?.message || "Unexpected error adding passkey";
     } finally {
       isAdding.value = false;
-    }
-  });
-
-  const loadPasskeys = $(async () => {
-    isLoading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      const list = await webauthnClient.getUserPasskeys(props.userId);
-      passkeys.value = list;
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Failed to load passkeys";
-      error.value = msg;
-      await props.onError?.(msg);
-    } finally {
-      isLoading.value = false;
     }
   });
 

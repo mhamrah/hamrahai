@@ -36,6 +36,8 @@ export const onGet: RequestHandler = async (event) => {
   );
   const codeVerifier =
     event.cookie.get("google_oauth_code_verifier")?.value ?? null;
+  const linkProvider =
+    event.cookie.get("google_oauth_link_provider")?.value === "true";
 
   if (
     !code ||
@@ -64,7 +66,7 @@ export const onGet: RequestHandler = async (event) => {
   try {
     const apiClient = createApiClient(event);
     const authResult = await apiClient.nativeAuth(
-      buildGoogleNativeAuthRequest(idToken),
+      buildGoogleNativeAuthRequest(idToken, linkProvider),
     );
 
     if (!authResult.refresh_token) {
@@ -80,6 +82,7 @@ export const onGet: RequestHandler = async (event) => {
     event.cookie.delete("google_oauth_state");
     event.cookie.delete("google_oauth_code_verifier");
     event.cookie.delete("google_oauth_redirect");
+    event.cookie.delete("google_oauth_link_provider");
     throw event.redirect(
       302,
       "/auth/login?error=" +
@@ -91,6 +94,7 @@ export const onGet: RequestHandler = async (event) => {
   event.cookie.delete("google_oauth_state");
   event.cookie.delete("google_oauth_code_verifier");
   event.cookie.delete("google_oauth_redirect");
+  event.cookie.delete("google_oauth_link_provider");
 
   throw event.redirect(302, redirect);
 };

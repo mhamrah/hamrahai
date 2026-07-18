@@ -19,6 +19,8 @@ export const onPost: RequestHandler = async (event) => {
   const redirect = safeRedirectPath(
     event.cookie.get("apple_oauth_redirect")?.value,
   );
+  const linkProvider =
+    event.cookie.get("apple_oauth_link_provider")?.value === "true";
 
   if (!code || !state || !storedState || state !== storedState) {
     console.log(
@@ -39,7 +41,7 @@ export const onPost: RequestHandler = async (event) => {
 
     const apiClient = createApiClient(event);
     const authResult = await apiClient.nativeAuth(
-      buildAppleNativeAuthRequest(idToken),
+      buildAppleNativeAuthRequest(idToken, linkProvider),
     );
 
     if (!authResult.refresh_token) {
@@ -54,6 +56,7 @@ export const onPost: RequestHandler = async (event) => {
     );
     event.cookie.delete("apple_oauth_state");
     event.cookie.delete("apple_oauth_redirect");
+    event.cookie.delete("apple_oauth_link_provider");
     throw event.redirect(
       302,
       "/auth/login?error=" +
@@ -63,5 +66,6 @@ export const onPost: RequestHandler = async (event) => {
 
   event.cookie.delete("apple_oauth_state");
   event.cookie.delete("apple_oauth_redirect");
+  event.cookie.delete("apple_oauth_link_provider");
   throw event.redirect(302, redirect);
 };

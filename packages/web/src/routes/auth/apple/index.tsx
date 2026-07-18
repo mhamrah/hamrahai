@@ -8,6 +8,8 @@ export const onGet: RequestHandler = async (event) => {
   const apple = getAppleProvider(event);
   const state = generateState();
   const redirect = safeRedirectPath(event.url.searchParams.get("redirect"));
+  const linkProvider =
+    event.url.searchParams.get("link_provider") === "true" ? "true" : "false";
 
   const url = apple.createAuthorizationURL(state, ["name", "email"]);
   url.searchParams.set("response_mode", "form_post");
@@ -22,6 +24,13 @@ export const onGet: RequestHandler = async (event) => {
   });
 
   event.cookie.set("apple_oauth_redirect", redirect, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    maxAge: 60 * 10,
+    sameSite: "none",
+  });
+  event.cookie.set("apple_oauth_link_provider", linkProvider, {
     path: "/",
     secure: true,
     httpOnly: true,

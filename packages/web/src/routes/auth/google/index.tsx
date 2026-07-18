@@ -8,6 +8,8 @@ export const onGet: RequestHandler = async (event) => {
   const state = generateState();
   const codeVerifier = generateCodeVerifier();
   const redirect = safeRedirectPath(event.url.searchParams.get("redirect"));
+  const linkProvider =
+    event.url.searchParams.get("link_provider") === "true" ? "true" : "false";
 
   const url = google.createAuthorizationURL(state, codeVerifier, [
     "openid",
@@ -33,6 +35,13 @@ export const onGet: RequestHandler = async (event) => {
   });
 
   event.cookie.set("google_oauth_redirect", redirect, {
+    path: "/",
+    secure: event.url.protocol === "https:",
+    httpOnly: true,
+    maxAge: 60 * 10,
+    sameSite: "lax",
+  });
+  event.cookie.set("google_oauth_link_provider", linkProvider, {
     path: "/",
     secure: event.url.protocol === "https:",
     httpOnly: true,

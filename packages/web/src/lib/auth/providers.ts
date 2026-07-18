@@ -1,21 +1,29 @@
 import { Google, Apple } from "arctic";
 import { jwtVerify, importJWK } from "jose";
 
-export function buildGoogleNativeAuthRequest(credential: string) {
+export function buildGoogleNativeAuthRequest(
+  credential: string,
+  linkProvider = false,
+) {
   return {
     provider: "google" as const,
     credential,
     auth_method: "google",
     platform: "web" as const,
+    ...(linkProvider ? { link_provider: "true" as const } : {}),
   };
 }
 
-export function buildAppleNativeAuthRequest(credential: string) {
+export function buildAppleNativeAuthRequest(
+  credential: string,
+  linkProvider = false,
+) {
   return {
     provider: "apple" as const,
     credential,
     auth_method: "apple",
     platform: "web" as const,
+    ...(linkProvider ? { link_provider: "true" as const } : {}),
   };
 }
 
