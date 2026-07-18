@@ -253,8 +253,9 @@ async fn restart_music_import_wrapper(
     axum::extract::State((pool, _)): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     path: axum::extract::Path<uuid::Uuid>,
+    json: Option<axum::Json<music::CreateImportRequest>>,
 ) -> Response {
-    music::restart_import(axum::extract::State(pool), headers, path).await
+    music::restart_import(axum::extract::State(pool), headers, path, json).await
 }
 
 async fn list_music_imports_wrapper(

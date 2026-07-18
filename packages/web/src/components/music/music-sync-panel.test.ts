@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { MusicImportWire } from "@hamrah/shared";
 
-import { failedImportMessage } from "./music-sync-panel";
+import {
+  failedImportMessage,
+  musicImportOptionsDisabled,
+} from "./music-sync-panel";
 
 const failedImport = (error?: string): MusicImportWire => ({
   id: "import-1",
@@ -46,5 +49,21 @@ describe("failedImportMessage", () => {
     expect(failedImportMessage(failedImport())).toBe(
       "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.",
     );
+  });
+});
+
+describe("musicImportOptionsDisabled", () => {
+  it("allows collection choices to change before retrying a failed import", () => {
+    expect(musicImportOptionsDisabled(failedImport())).toBe(false);
+  });
+
+  it("locks collection choices while an import is active", () => {
+    expect(
+      musicImportOptionsDisabled({
+        ...failedImport(),
+        status: "running",
+        stage: "reading_spotify",
+      }),
+    ).toBe(true);
   });
 });
