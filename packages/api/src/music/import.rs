@@ -14,7 +14,7 @@ use super::query_value;
 
 const SPOTIFY_API_BASE: &str = "https://api.spotify.com";
 const TIDAL_API_BASE: &str = "https://openapi.tidal.com/v2";
-const TIDAL_MEDIA_TYPE: &str = "application/vnd.tidal.v1+json";
+const TIDAL_MEDIA_TYPE: &str = "application/vnd.api+json";
 const TIDAL_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const TIDAL_RATE_LIMIT_RETRIES: u8 = 3;
 const INACCESSIBLE_SPOTIFY_PLAYLIST_WARNING: &str = "Some Spotify playlists could not be read. Check that you own or collaborate on them, then restart to retry safely.";
@@ -1467,14 +1467,17 @@ mod tests {
     async fn retries_a_rate_limited_tidal_playlist_request_with_the_same_idempotency_key() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
+        let media_types = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new().route(
             "/playlists",
             post({
                 let attempts = Arc::clone(&attempts);
                 let idempotency_keys = Arc::clone(&idempotency_keys);
+                let media_types = Arc::clone(&media_types);
                 move |headers: HeaderMap| {
                     let attempts = Arc::clone(&attempts);
                     let idempotency_keys = Arc::clone(&idempotency_keys);
+                    let media_types = Arc::clone(&media_types);
                     async move {
                         idempotency_keys.lock().unwrap().push(
                             headers
@@ -1484,6 +1487,20 @@ mod tests {
                                 .unwrap()
                                 .to_string(),
                         );
+                        media_types.lock().unwrap().push((
+                            headers
+                                .get(header::ACCEPT)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                            headers
+                                .get(header::CONTENT_TYPE)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                        ));
                         if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
                             (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "0")])
                                 .into_response()
@@ -1518,6 +1535,19 @@ mod tests {
         assert_eq!(
             *idempotency_keys.lock().unwrap(),
             vec!["stable-idempotency-key", "stable-idempotency-key"]
+        );
+        assert_eq!(
+            *media_types.lock().unwrap(),
+            vec![
+                (
+                    "application/vnd.api+json".to_string(),
+                    "application/vnd.api+json".to_string(),
+                ),
+                (
+                    "application/vnd.api+json".to_string(),
+                    "application/vnd.api+json".to_string(),
+                ),
+            ]
         );
     }
 
