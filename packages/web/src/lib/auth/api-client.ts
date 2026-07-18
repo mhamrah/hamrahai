@@ -130,6 +130,10 @@ export class HamrahApiClient {
       );
     }
 
+    if (resp.status === 204) {
+      return undefined as T;
+    }
+
     let body: unknown = null;
     try {
       body = await resp.json();
