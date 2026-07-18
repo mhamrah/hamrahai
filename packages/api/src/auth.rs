@@ -71,6 +71,10 @@ pub struct NativeLoginRequest {
     pub provider_id: Option<String>,
     pub auth_method: Option<String>,
     pub platform: Option<String>,
+    /// When true, this is an account-linking operation rather than a sign-in.
+    /// Linking must be authenticated so an expired client session cannot create
+    /// a second account and replace the user's active session.
+    pub link_provider: Option<String>,
     pub email_verified_at: Option<chrono::DateTime<Utc>>,
     pub id_token: Option<String>,
     pub credential: Option<String>,
@@ -206,6 +210,16 @@ pub async fn auth_native(
         .or(Some(provider.as_str()))
         .unwrap_or("oauth");
     let current_user = current_bearer_user(&pool, &headers).await;
+    if req.link_provider.as_deref() == Some("true") && current_user.is_none() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(AuthErrorResponse {
+                success: false,
+                error: "Sign in again before linking an authentication provider".to_string(),
+            }),
+        )
+            .into_response();
+    }
     let user = match resolve_native_user(&pool, &provider, &identity, current_user).await {
         Ok(user) => user,
         Err(ResolveNativeUserError::ProviderAlreadyLinked) => {

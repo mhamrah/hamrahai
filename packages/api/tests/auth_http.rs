@@ -790,6 +790,45 @@ async fn http_native_apple_rejects_conflicting_token_fields_without_422() -> any
 }
 
 #[tokio::test]
+async fn http_native_provider_link_requires_an_authenticated_session() -> anyhow::Result<()> {
+    let Some((_pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    unsafe {
+        env::set_var("GOOGLE_AUTH_TEST_BYPASS", "true");
+    }
+
+    let email = format!("unlinked-provider-{}@example.com", Uuid::new_v4());
+    let payload = json!({
+        "provider": "google",
+        "platform": "ios",
+        "id_token": format!("test-google:{email}"),
+        "link_provider": "true"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/native")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body_bytes = body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(parsed["success"], false);
+    assert_eq!(
+        parsed["error"],
+        "Sign in again before linking an authentication provider"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow::Result<()> {
     let Some((_pool, router)) = setup_router().await? else {
         return Ok(());
@@ -826,7 +865,8 @@ async fn http_native_oauth_links_new_provider_to_authenticated_user() -> anyhow:
     let google_payload = json!({
         "provider": "google",
         "platform": "ios",
-        "id_token": format!("test-google:{google_email}")
+        "id_token": format!("test-google:{google_email}"),
+        "link_provider": "true"
     });
     let google_req = Request::builder()
         .method("POST")

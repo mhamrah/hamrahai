@@ -204,6 +204,18 @@ struct hamrah_ios_tests {
         #expect(payload["credential"] == nil)
     }
 
+    @MainActor
+    @Test func nativeAuthPayloadMarksProviderLinkingRequests() {
+        let payload = NativeAuthManager.backendAuthPayload(
+            provider: "google",
+            credential: "google.jwt",
+            platform: "ios",
+            linkProvider: true
+        )
+
+        #expect(payload["link_provider"] == "true")
+    }
+
     @Test func webAuthnBeginResponseDecodesSnakeCaseSuccessPayload() throws {
         let jsonData = """
             {
