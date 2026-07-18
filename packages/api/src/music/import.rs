@@ -511,7 +511,7 @@ impl MusicImportProvider for HttpMusicImportProvider {
             ),
             track_ids,
             idempotency_key,
-            Some("end"),
+            None,
         )
         .await
     }
@@ -1588,7 +1588,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn adds_playlist_tracks_at_the_end_of_the_tidal_playlist() {
+    async fn appends_playlist_tracks_without_a_position_before_uuid() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new().route(
             "/playlists/tidal-playlist/relationships/items",
@@ -1634,7 +1634,6 @@ mod tests {
                     { "type": "tracks", "id": "tidal-track-a" },
                     { "type": "tracks", "id": "tidal-track-b" },
                 ],
-                "meta": { "positionBefore": "end" },
             })]
         );
     }
