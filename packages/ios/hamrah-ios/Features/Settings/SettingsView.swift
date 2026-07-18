@@ -367,7 +367,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var musicSyncSection: some View {
         Section("Music Import & Status") {
-            Text("Create matching empty TIDAL playlists and follow exact artist-name matches. Public Spotify playlists remain public; all others are unlisted. Tracks and playlist contents are not transferred.")
+            Text("Copy Spotify playlist tracks and Liked Songs to TIDAL when their ISRC identifiers match exactly, and follow exact artist-name matches. Public Spotify playlists remain public; all others are unlisted.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 

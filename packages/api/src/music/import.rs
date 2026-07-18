@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     sync::OnceLock,
     time::{Duration, Instant},
@@ -64,6 +64,11 @@ pub(super) struct SpotifyArtist {
     pub name: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SpotifyTrack {
+    pub isrc: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TidalPlaylistVisibility {
     Public,
@@ -84,6 +89,7 @@ pub(super) struct ImportOptions {
     pub include_owned_playlists: bool,
     pub include_saved_playlists: bool,
     pub include_followed_artists: bool,
+    pub include_saved_tracks: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -103,6 +109,12 @@ pub(super) struct ImportProgress {
     pub artists_matched: i32,
     pub artists_followed: i32,
     pub artists_unmatched: i32,
+    pub playlist_track_total: i32,
+    pub playlist_tracks_imported: i32,
+    pub saved_track_total: i32,
+    pub saved_tracks_imported: i32,
+    pub tracks_matched: i32,
+    pub tracks_unmatched: i32,
 }
 
 impl Default for ImportProgress {
@@ -116,6 +128,12 @@ impl Default for ImportProgress {
             artists_matched: 0,
             artists_followed: 0,
             artists_unmatched: 0,
+            playlist_track_total: 0,
+            playlist_tracks_imported: 0,
+            saved_track_total: 0,
+            saved_tracks_imported: 0,
+            tracks_matched: 0,
+            tracks_unmatched: 0,
         }
     }
 }
@@ -130,13 +148,31 @@ pub(super) struct ImportFailure {
 pub(super) trait MusicImportProvider {
     async fn spotify_current_user_id(&self) -> Result<String, String>;
     async fn spotify_playlists(&self) -> Result<Vec<SpotifyPlaylist>, String>;
+    async fn spotify_playlist_tracks(&self, playlist_id: &str)
+    -> Result<Vec<SpotifyTrack>, String>;
+    async fn spotify_saved_tracks(&self) -> Result<Vec<SpotifyTrack>, String>;
     async fn spotify_followed_artists(&self) -> Result<Vec<SpotifyArtist>, String>;
     async fn create_tidal_playlist(
         &self,
         playlist: &SpotifyPlaylist,
         visibility: TidalPlaylistVisibility,
         idempotency_key: String,
-    ) -> Result<(), String>;
+    ) -> Result<String, String>;
+    async fn tidal_tracks_by_isrc(
+        &self,
+        isrcs: &[String],
+    ) -> Result<HashMap<String, String>, String>;
+    async fn add_tidal_playlist_tracks(
+        &self,
+        playlist_id: &str,
+        track_ids: &[String],
+        idempotency_key: String,
+    ) -> Result<TrackWriteOutcome, String>;
+    async fn save_tidal_tracks(
+        &self,
+        track_ids: &[String],
+        idempotency_key: String,
+    ) -> Result<TrackWriteOutcome, String>;
     async fn find_tidal_artist(&self, name: &str) -> Result<Option<String>, String>;
     async fn follow_tidal_artists(
         &self,
@@ -147,6 +183,12 @@ pub(super) trait MusicImportProvider {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct FollowOutcome {
+    pub imported_items: i32,
+    pub unmatched_items: i32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct TrackWriteOutcome {
     pub imported_items: i32,
     pub unmatched_items: i32,
 }
@@ -231,6 +273,50 @@ impl HttpMusicImportProvider {
         }
         unreachable!("rate-limit retry loop always returns")
     }
+
+    async fn tidal_add_tracks(
+        &self,
+        url: String,
+        track_ids: &[String],
+        idempotency_key: String,
+        position_before: Option<&str>,
+    ) -> Result<TrackWriteOutcome, String> {
+        let data = track_ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "type": "tracks",
+                    "id": id,
+                })
+            })
+            .collect::<Vec<_>>();
+        let body = match position_before {
+            Some(position_before) => serde_json::json!({
+                "data": data,
+                "meta": { "positionBefore": position_before },
+            }),
+            None => serde_json::json!({ "data": data }),
+        };
+        let response: TidalTrackWriteResponse = self
+            .tidal_request(|| {
+                self.client
+                    .post(&url)
+                    .bearer_auth(&self.tidal_access_token)
+                    .header("accept", "application/vnd.api+json")
+                    .header("content-type", "application/vnd.api+json")
+                    .header("idempotency-key", &idempotency_key)
+                    .json(&body)
+            })
+            .await?
+            .json()
+            .await
+            .map_err(|error| error.to_string())?;
+        let skipped = response.meta.skipped.len() as i32;
+        Ok(TrackWriteOutcome {
+            imported_items: track_ids.len() as i32 - skipped,
+            unmatched_items: skipped,
+        })
+    }
 }
 
 impl MusicImportProvider for HttpMusicImportProvider {
@@ -259,6 +345,47 @@ impl MusicImportProvider for HttpMusicImportProvider {
         }
     }
 
+    async fn spotify_playlist_tracks(
+        &self,
+        playlist_id: &str,
+    ) -> Result<Vec<SpotifyTrack>, String> {
+        let mut url = format!(
+            "{SPOTIFY_API_BASE}/v1/playlists/{}/tracks?limit=50",
+            query_value(playlist_id)
+        );
+        let mut tracks = Vec::new();
+        loop {
+            let page: SpotifyPlaylistTrackPage = self.spotify_get(url).await?;
+            tracks.extend(
+                page.items
+                    .into_iter()
+                    .filter_map(|item| item.track)
+                    .filter_map(spotify_track),
+            );
+            match page.next {
+                Some(next) => url = next,
+                None => return Ok(tracks),
+            }
+        }
+    }
+
+    async fn spotify_saved_tracks(&self) -> Result<Vec<SpotifyTrack>, String> {
+        let mut url = format!("{SPOTIFY_API_BASE}/v1/me/tracks?limit=50");
+        let mut tracks = Vec::new();
+        loop {
+            let page: SpotifySavedTrackPage = self.spotify_get(url).await?;
+            tracks.extend(
+                page.items
+                    .into_iter()
+                    .filter_map(|item| spotify_track(item.track)),
+            );
+            match page.next {
+                Some(next) => url = next,
+                None => return Ok(tracks),
+            }
+        }
+    }
+
     async fn spotify_followed_artists(&self) -> Result<Vec<SpotifyArtist>, String> {
         let mut url = format!("{SPOTIFY_API_BASE}/v1/me/following?type=artist&limit=50");
         let mut artists = Vec::new();
@@ -282,7 +409,7 @@ impl MusicImportProvider for HttpMusicImportProvider {
         playlist: &SpotifyPlaylist,
         visibility: TidalPlaylistVisibility,
         idempotency_key: String,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let body = serde_json::json!({
             "data": {
                 "type": "playlists",
@@ -301,8 +428,69 @@ impl MusicImportProvider for HttpMusicImportProvider {
                 .header("idempotency-key", &idempotency_key)
                 .json(&body)
         })
-        .await?;
-        Ok(())
+        .await?
+        .json::<TidalPlaylistCreateResponse>()
+        .await
+        .map(|response| response.data.id)
+        .map_err(|error| error.to_string())
+    }
+
+    async fn tidal_tracks_by_isrc(
+        &self,
+        isrcs: &[String],
+    ) -> Result<HashMap<String, String>, String> {
+        if isrcs.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let query = isrcs
+            .iter()
+            .map(|isrc| format!("filter%5Bisrc%5D={}", query_value(isrc)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let response: TidalTracksResponse = self
+            .tidal_get(format!("{}/tracks?{query}", self.tidal_api_base))
+            .await?;
+        Ok(response
+            .data
+            .into_iter()
+            .filter_map(|track| track.attributes.isrc.map(|isrc| (isrc, track.id)))
+            .collect())
+    }
+
+    async fn add_tidal_playlist_tracks(
+        &self,
+        playlist_id: &str,
+        track_ids: &[String],
+        idempotency_key: String,
+    ) -> Result<TrackWriteOutcome, String> {
+        self.tidal_add_tracks(
+            format!(
+                "{}/playlists/{}/relationships/items",
+                self.tidal_api_base,
+                query_value(playlist_id)
+            ),
+            track_ids,
+            idempotency_key,
+            Some("end"),
+        )
+        .await
+    }
+
+    async fn save_tidal_tracks(
+        &self,
+        track_ids: &[String],
+        idempotency_key: String,
+    ) -> Result<TrackWriteOutcome, String> {
+        self.tidal_add_tracks(
+            format!(
+                "{}/userCollectionTracks/me/relationships/items",
+                self.tidal_api_base
+            ),
+            track_ids,
+            idempotency_key,
+            None,
+        )
+        .await
     }
 
     async fn find_tidal_artist(&self, name: &str) -> Result<Option<String>, String> {
@@ -412,6 +600,30 @@ where
     } else {
         Vec::new()
     };
+    let mut playlist_tracks = Vec::with_capacity(playlists.len());
+    for playlist in playlists {
+        let tracks = provider
+            .spotify_playlist_tracks(&playlist.id)
+            .await
+            .map_err(|message| ImportFailure {
+                message,
+                outcome: outcome.clone(),
+                progress: progress.clone(),
+            })?;
+        playlist_tracks.push((playlist, tracks));
+    }
+    let saved_tracks = if options.include_saved_tracks {
+        provider
+            .spotify_saved_tracks()
+            .await
+            .map_err(|message| ImportFailure {
+                message,
+                outcome: outcome.clone(),
+                progress: progress.clone(),
+            })?
+    } else {
+        Vec::new()
+    };
     let artists = if options.include_followed_artists {
         provider
             .spotify_followed_artists()
@@ -424,23 +636,34 @@ where
     } else {
         Vec::new()
     };
-    outcome.total_items = (playlists.len() + artists.len()) as i32;
-    progress.playlist_total = playlists.len() as i32;
+    outcome.total_items = (playlist_tracks.len()
+        + artists.len()
+        + playlist_tracks
+            .iter()
+            .map(|(_, tracks)| tracks.len())
+            .sum::<usize>()
+        + saved_tracks.len()) as i32;
+    progress.playlist_total = playlist_tracks.len() as i32;
     progress.artist_total = artists.len() as i32;
-    progress.stage = if playlists.is_empty() {
+    progress.playlist_track_total = playlist_tracks
+        .iter()
+        .map(|(_, tracks)| tracks.len() as i32)
+        .sum();
+    progress.saved_track_total = saved_tracks.len() as i32;
+    progress.stage = if playlist_tracks.is_empty() {
         "matching_artists"
     } else {
         "creating_playlists"
     };
     report_progress(progress.clone()).await;
 
-    for playlist in playlists {
+    for (playlist, tracks) in playlist_tracks {
         let visibility = if playlist.is_public {
             TidalPlaylistVisibility::Public
         } else {
             TidalPlaylistVisibility::Unlisted
         };
-        provider
+        let tidal_playlist_id = provider
             .create_tidal_playlist(
                 &playlist,
                 visibility,
@@ -455,6 +678,44 @@ where
         outcome.imported_items += 1;
         progress.playlists_imported += 1;
         report_progress(progress.clone()).await;
+
+        progress.stage = "adding_playlist_tracks";
+        report_progress(progress.clone()).await;
+        for (batch_index, tracks) in tracks.chunks(50).enumerate() {
+            let (tidal_track_ids, unmatched) =
+                match_tidal_tracks(provider, tracks)
+                    .await
+                    .map_err(|message| ImportFailure {
+                        message,
+                        outcome: outcome.clone(),
+                        progress: progress.clone(),
+                    })?;
+            outcome.unmatched_items += unmatched;
+            progress.tracks_unmatched += unmatched;
+            progress.tracks_matched += tidal_track_ids.len() as i32;
+            if !tidal_track_ids.is_empty() {
+                let result = provider
+                    .add_tidal_playlist_tracks(
+                        &tidal_playlist_id,
+                        &tidal_track_ids,
+                        idempotency_key(
+                            import_id,
+                            &format!("playlist_tracks:{}:{batch_index}", playlist.id),
+                        ),
+                    )
+                    .await
+                    .map_err(|message| ImportFailure {
+                        message,
+                        outcome: outcome.clone(),
+                        progress: progress.clone(),
+                    })?;
+                outcome.imported_items += result.imported_items;
+                outcome.unmatched_items += result.unmatched_items;
+                progress.playlist_tracks_imported += result.imported_items;
+                progress.tracks_unmatched += result.unmatched_items;
+            }
+            report_progress(progress.clone()).await;
+        }
     }
 
     progress.stage = "matching_artists";
@@ -507,7 +768,68 @@ where
         progress.artists_unmatched += result.unmatched_items;
         report_progress(progress.clone()).await;
     }
+
+    if !saved_tracks.is_empty() {
+        progress.stage = "saving_liked_tracks";
+        report_progress(progress.clone()).await;
+        for (batch_index, tracks) in saved_tracks.chunks(50).enumerate() {
+            let (tidal_track_ids, unmatched) =
+                match_tidal_tracks(provider, tracks)
+                    .await
+                    .map_err(|message| ImportFailure {
+                        message,
+                        outcome: outcome.clone(),
+                        progress: progress.clone(),
+                    })?;
+            outcome.unmatched_items += unmatched;
+            progress.tracks_unmatched += unmatched;
+            progress.tracks_matched += tidal_track_ids.len() as i32;
+            if !tidal_track_ids.is_empty() {
+                let result = provider
+                    .save_tidal_tracks(
+                        &tidal_track_ids,
+                        idempotency_key(import_id, &format!("saved_tracks:{batch_index}")),
+                    )
+                    .await
+                    .map_err(|message| ImportFailure {
+                        message,
+                        outcome: outcome.clone(),
+                        progress: progress.clone(),
+                    })?;
+                outcome.imported_items += result.imported_items;
+                outcome.unmatched_items += result.unmatched_items;
+                progress.saved_tracks_imported += result.imported_items;
+                progress.tracks_unmatched += result.unmatched_items;
+            }
+            report_progress(progress.clone()).await;
+        }
+    }
     Ok((outcome, progress))
+}
+
+async fn match_tidal_tracks<P>(
+    provider: &P,
+    tracks: &[SpotifyTrack],
+) -> Result<(Vec<String>, i32), String>
+where
+    P: MusicImportProvider,
+{
+    let mut seen_isrcs = HashSet::new();
+    let isrcs = tracks
+        .iter()
+        .filter_map(|track| track.isrc.as_ref())
+        .filter(|isrc| seen_isrcs.insert((*isrc).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let tidal_tracks = provider.tidal_tracks_by_isrc(&isrcs).await?;
+    let tidal_track_ids = tracks
+        .iter()
+        .filter_map(|track| track.isrc.as_ref())
+        .filter_map(|isrc| tidal_tracks.get(isrc))
+        .cloned()
+        .collect::<Vec<_>>();
+    let unmatched = tracks.len() as i32 - tidal_track_ids.len() as i32;
+    Ok((tidal_track_ids, unmatched))
 }
 
 fn idempotency_key(import_id: Uuid, purpose: &str) -> String {
@@ -553,6 +875,43 @@ struct SpotifyFollowingPage {
 }
 
 #[derive(Deserialize)]
+struct SpotifyPlaylistTrackPage {
+    items: Vec<SpotifyPlaylistTrackItem>,
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SpotifyPlaylistTrackItem {
+    #[serde(alias = "item")]
+    track: Option<SpotifyTrackWire>,
+}
+
+#[derive(Deserialize)]
+struct SpotifySavedTrackPage {
+    items: Vec<SpotifySavedTrackItem>,
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SpotifySavedTrackItem {
+    track: SpotifyTrackWire,
+}
+
+#[derive(Deserialize)]
+struct SpotifyTrackWire {
+    #[serde(rename = "type")]
+    resource_type: Option<String>,
+    #[serde(default)]
+    is_local: bool,
+    external_ids: Option<SpotifyExternalIds>,
+}
+
+#[derive(Deserialize)]
+struct SpotifyExternalIds {
+    isrc: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct SpotifyArtistPage {
     items: Vec<SpotifyArtistWire>,
     next: Option<String>,
@@ -561,6 +920,40 @@ struct SpotifyArtistPage {
 #[derive(Deserialize)]
 struct SpotifyArtistWire {
     name: String,
+}
+
+fn spotify_track(track: SpotifyTrackWire) -> Option<SpotifyTrack> {
+    (track.resource_type.as_deref().unwrap_or("track") == "track" && !track.is_local).then_some(
+        SpotifyTrack {
+            isrc: track.external_ids.and_then(|ids| ids.isrc),
+        },
+    )
+}
+
+#[derive(Deserialize)]
+struct TidalPlaylistCreateResponse {
+    data: TidalPlaylistResource,
+}
+
+#[derive(Deserialize)]
+struct TidalPlaylistResource {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct TidalTracksResponse {
+    data: Vec<TidalTrackResource>,
+}
+
+#[derive(Deserialize)]
+struct TidalTrackResource {
+    id: String,
+    attributes: TidalTrackAttributes,
+}
+
+#[derive(Deserialize)]
+struct TidalTrackAttributes {
+    isrc: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -598,8 +991,21 @@ struct TidalSkippedArtist {
     reason: String,
 }
 
+#[derive(Deserialize, Default)]
+struct TidalTrackWriteResponse {
+    #[serde(default)]
+    meta: TidalTrackWriteMeta,
+}
+
+#[derive(Deserialize, Default)]
+struct TidalTrackWriteMeta {
+    #[serde(default)]
+    skipped: Vec<serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -615,9 +1021,14 @@ mod tests {
 
     struct FakeProvider {
         playlists: Vec<SpotifyPlaylist>,
+        playlist_tracks: HashMap<String, Vec<SpotifyTrack>>,
+        saved_tracks: Vec<SpotifyTrack>,
+        tidal_tracks: HashMap<String, String>,
         artists: Vec<SpotifyArtist>,
         matched_artist: Option<String>,
         created_playlists: Mutex<Vec<(String, TidalPlaylistVisibility)>>,
+        added_playlist_tracks: Mutex<Vec<(String, Vec<String>)>>,
+        saved_tidal_tracks: Mutex<Vec<String>>,
         followed_artists: Mutex<Vec<String>>,
     }
 
@@ -630,6 +1041,21 @@ mod tests {
             Ok(self.playlists.clone())
         }
 
+        async fn spotify_playlist_tracks(
+            &self,
+            playlist_id: &str,
+        ) -> Result<Vec<SpotifyTrack>, String> {
+            Ok(self
+                .playlist_tracks
+                .get(playlist_id)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn spotify_saved_tracks(&self) -> Result<Vec<SpotifyTrack>, String> {
+            Ok(self.saved_tracks.clone())
+        }
+
         async fn spotify_followed_artists(&self) -> Result<Vec<SpotifyArtist>, String> {
             Ok(self.artists.clone())
         }
@@ -639,12 +1065,57 @@ mod tests {
             playlist: &SpotifyPlaylist,
             visibility: TidalPlaylistVisibility,
             _idempotency_key: String,
-        ) -> Result<(), String> {
+        ) -> Result<String, String> {
             self.created_playlists
                 .lock()
                 .unwrap()
                 .push((playlist.id.clone(), visibility));
-            Ok(())
+            Ok(format!("tidal-{}", playlist.id))
+        }
+
+        async fn tidal_tracks_by_isrc(
+            &self,
+            isrcs: &[String],
+        ) -> Result<HashMap<String, String>, String> {
+            Ok(isrcs
+                .iter()
+                .filter_map(|isrc| {
+                    self.tidal_tracks
+                        .get(isrc)
+                        .map(|track_id| (isrc.clone(), track_id.clone()))
+                })
+                .collect())
+        }
+
+        async fn add_tidal_playlist_tracks(
+            &self,
+            playlist_id: &str,
+            track_ids: &[String],
+            _idempotency_key: String,
+        ) -> Result<TrackWriteOutcome, String> {
+            self.added_playlist_tracks
+                .lock()
+                .unwrap()
+                .push((playlist_id.to_string(), track_ids.to_vec()));
+            Ok(TrackWriteOutcome {
+                imported_items: track_ids.len() as i32,
+                unmatched_items: 0,
+            })
+        }
+
+        async fn save_tidal_tracks(
+            &self,
+            track_ids: &[String],
+            _idempotency_key: String,
+        ) -> Result<TrackWriteOutcome, String> {
+            self.saved_tidal_tracks
+                .lock()
+                .unwrap()
+                .extend_from_slice(track_ids);
+            Ok(TrackWriteOutcome {
+                imported_items: track_ids.len() as i32,
+                unmatched_items: 0,
+            })
         }
 
         async fn find_tidal_artist(&self, _name: &str) -> Result<Option<String>, String> {
@@ -676,6 +1147,12 @@ mod tests {
         }
     }
 
+    fn track(isrc: Option<&str>) -> SpotifyTrack {
+        SpotifyTrack {
+            isrc: isrc.map(str::to_string),
+        }
+    }
+
     #[tokio::test]
     async fn imports_owned_playlists_with_matching_visibility_and_follows_exact_artist_matches() {
         let provider = FakeProvider {
@@ -684,11 +1161,16 @@ mod tests {
                 playlist("private-owned", "spotify-user", false),
                 playlist("saved", "other-user", true),
             ],
+            playlist_tracks: HashMap::new(),
+            saved_tracks: Vec::new(),
+            tidal_tracks: HashMap::new(),
             artists: vec![SpotifyArtist {
                 name: "The Artist".to_string(),
             }],
             matched_artist: Some("tidal-artist".to_string()),
             created_playlists: Mutex::new(Vec::new()),
+            added_playlist_tracks: Mutex::new(Vec::new()),
+            saved_tidal_tracks: Mutex::new(Vec::new()),
             followed_artists: Mutex::new(Vec::new()),
         };
 
@@ -699,6 +1181,7 @@ mod tests {
                 include_owned_playlists: true,
                 include_saved_playlists: false,
                 include_followed_artists: true,
+                include_saved_tracks: false,
             },
             |_| async {},
         )
@@ -732,9 +1215,14 @@ mod tests {
                 playlist("owned", "spotify-user", true),
                 playlist("saved", "other-user", false),
             ],
+            playlist_tracks: HashMap::new(),
+            saved_tracks: Vec::new(),
+            tidal_tracks: HashMap::new(),
             artists: Vec::new(),
             matched_artist: None,
             created_playlists: Mutex::new(Vec::new()),
+            added_playlist_tracks: Mutex::new(Vec::new()),
+            saved_tidal_tracks: Mutex::new(Vec::new()),
             followed_artists: Mutex::new(Vec::new()),
         };
 
@@ -745,6 +1233,7 @@ mod tests {
                 include_owned_playlists: false,
                 include_saved_playlists: true,
                 include_followed_artists: false,
+                include_saved_tracks: false,
             },
             |_| async {},
         )
@@ -761,14 +1250,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn imports_exact_isrc_playlist_tracks_and_saved_tracks() {
+        let provider = FakeProvider {
+            playlists: vec![playlist("owned", "spotify-user", true)],
+            playlist_tracks: HashMap::from([(
+                "owned".to_string(),
+                vec![
+                    track(Some("US-AAA-01")),
+                    track(Some("US-MISSING-02")),
+                    track(None),
+                ],
+            )]),
+            saved_tracks: vec![track(Some("US-BBB-03"))],
+            tidal_tracks: HashMap::from([
+                ("US-AAA-01".to_string(), "tidal-a".to_string()),
+                ("US-BBB-03".to_string(), "tidal-b".to_string()),
+            ]),
+            artists: Vec::new(),
+            matched_artist: None,
+            created_playlists: Mutex::new(Vec::new()),
+            added_playlist_tracks: Mutex::new(Vec::new()),
+            saved_tidal_tracks: Mutex::new(Vec::new()),
+            followed_artists: Mutex::new(Vec::new()),
+        };
+
+        let (outcome, progress) = execute_import_with_progress(
+            &provider,
+            Uuid::nil(),
+            ImportOptions {
+                include_owned_playlists: true,
+                include_saved_playlists: false,
+                include_followed_artists: false,
+                include_saved_tracks: true,
+            },
+            |_| async {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.total_items, 5);
+        assert_eq!(outcome.imported_items, 3);
+        assert_eq!(outcome.unmatched_items, 2);
+        assert_eq!(progress.playlist_tracks_imported, 1);
+        assert_eq!(progress.saved_tracks_imported, 1);
+        assert_eq!(progress.tracks_matched, 2);
+        assert_eq!(
+            *provider.added_playlist_tracks.lock().unwrap(),
+            vec![("tidal-owned".to_string(), vec!["tidal-a".to_string()])]
+        );
+        assert_eq!(
+            *provider.saved_tidal_tracks.lock().unwrap(),
+            vec!["tidal-b".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn reports_collection_specific_import_progress() {
         let provider = FakeProvider {
             playlists: vec![playlist("owned", "spotify-user", true)],
+            playlist_tracks: HashMap::new(),
+            saved_tracks: Vec::new(),
+            tidal_tracks: HashMap::new(),
             artists: vec![SpotifyArtist {
                 name: "The Artist".to_string(),
             }],
             matched_artist: Some("tidal-artist".to_string()),
             created_playlists: Mutex::new(Vec::new()),
+            added_playlist_tracks: Mutex::new(Vec::new()),
+            saved_tidal_tracks: Mutex::new(Vec::new()),
             followed_artists: Mutex::new(Vec::new()),
         };
         let updates = Arc::new(Mutex::new(Vec::new()));
@@ -780,6 +1329,7 @@ mod tests {
                 include_owned_playlists: true,
                 include_saved_playlists: false,
                 include_followed_artists: true,
+                include_saved_tracks: false,
             },
             {
                 let updates = Arc::clone(&updates);
@@ -848,7 +1398,12 @@ mod tests {
                             (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "0")])
                                 .into_response()
                         } else {
-                            StatusCode::CREATED.into_response()
+                            (
+                                StatusCode::CREATED,
+                                [(header::CONTENT_TYPE, "application/vnd.api+json")],
+                                r#"{"data":{"type":"playlists","id":"tidal-playlist"}}"#,
+                            )
+                                .into_response()
                         }
                     }
                 }
@@ -873,6 +1428,58 @@ mod tests {
         assert_eq!(
             *idempotency_keys.lock().unwrap(),
             vec!["stable-idempotency-key", "stable-idempotency-key"]
+        );
+    }
+
+    #[tokio::test]
+    async fn adds_playlist_tracks_at_the_end_of_the_tidal_playlist() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().route(
+            "/playlists/tidal-playlist/relationships/items",
+            post({
+                let requests = Arc::clone(&requests);
+                move |body: String| {
+                    let requests = Arc::clone(&requests);
+                    async move {
+                        requests
+                            .lock()
+                            .unwrap()
+                            .push(serde_json::from_str::<serde_json::Value>(&body).unwrap());
+                        (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, "application/vnd.api+json")],
+                            r#"{"data":[],"links":{},"meta":{"skipped":[]}}"#,
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+
+        let result = provider
+            .add_tidal_playlist_tracks(
+                "tidal-playlist",
+                &["tidal-track-a".to_string(), "tidal-track-b".to_string()],
+                "stable-idempotency-key".to_string(),
+            )
+            .await
+            .unwrap();
+
+        server.abort();
+        assert_eq!(result.imported_items, 2);
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![serde_json::json!({
+                "data": [
+                    { "type": "tracks", "id": "tidal-track-a" },
+                    { "type": "tracks", "id": "tidal-track-b" },
+                ],
+                "meta": { "positionBefore": "end" },
+            })]
         );
     }
 }

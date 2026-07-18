@@ -204,6 +204,7 @@ export interface MusicImportRequestWire {
   include_owned_playlists: boolean;
   include_saved_playlists: boolean;
   include_followed_artists: boolean;
+  include_saved_tracks: boolean;
 }
 
 export interface MusicImportWire {
@@ -212,13 +213,16 @@ export interface MusicImportWire {
   include_owned_playlists: boolean;
   include_saved_playlists: boolean;
   include_followed_artists: boolean;
+  include_saved_tracks: boolean;
   stage:
     | "queued"
     | "preparing"
     | "reading_spotify"
     | "creating_playlists"
+    | "adding_playlist_tracks"
     | "matching_artists"
     | "following_artists"
+    | "saving_liked_tracks"
     | "completed"
     | "failed";
   total_items: number;
@@ -230,6 +234,11 @@ export interface MusicImportWire {
   artists_checked: number;
   artists_matched: number;
   artists_followed: number;
+  playlist_track_total: number;
+  playlist_tracks_imported: number;
+  saved_track_total: number;
+  saved_tracks_imported: number;
+  tracks_matched: number;
   error?: string | null;
   created_at: string;
 }

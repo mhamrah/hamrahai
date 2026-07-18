@@ -23,13 +23,17 @@ const importStage = (run: MusicImportWire) => {
       return "Reading selected Spotify collections";
     case "creating_playlists":
       return `Creating TIDAL playlists: ${run.playlists_imported} of ${run.playlist_total}`;
+    case "adding_playlist_tracks":
+      return `Adding playlist tracks: ${run.playlist_tracks_imported} of ${run.playlist_track_total}`;
     case "matching_artists":
       return `Checking artists for exact TIDAL matches: ${run.artists_checked} of ${run.artist_total}`;
     case "following_artists":
       return `Following exact TIDAL matches: ${run.artists_followed} of ${run.artists_matched}`;
+    case "saving_liked_tracks":
+      return `Saving Liked Songs: ${run.saved_tracks_imported} of ${run.saved_track_total}`;
     case "completed":
       return run.status === "partial"
-        ? "Completed with unmatched artists"
+        ? "Completed with unmatched items"
         : "Completed";
     case "failed":
       return "Import failed";
@@ -100,6 +104,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         include_owned_playlists: true,
         include_saved_playlists: includeSaved.value,
         include_followed_artists: true,
+        include_saved_tracks: true,
       });
       imports.value = [run, ...imports.value];
     } catch (cause) {
@@ -167,9 +172,9 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     <section class="mt-6 border-t border-gray-200 pt-6">
       <h2 class="text-xl font-semibold text-gray-950">Music import</h2>
       <p class="mt-2 text-sm leading-6 text-gray-600">
-        Create matching empty TIDAL playlists and follow exact artist-name
-        matches. Public Spotify playlists remain public; all others are
-        unlisted. Tracks and playlist contents are not transferred.
+        Copy Spotify playlist tracks and Liked Songs to TIDAL when their ISRC
+        identifiers match exactly, and follow exact artist-name matches. Public
+        Spotify playlists remain public; all others are unlisted.
       </p>
       {error.value && (
         <p class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
@@ -255,11 +260,15 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
             {importStage(imports.value[0])}
           </p>
           <p class="mt-1">
-            Selected from Spotify: {imports.value[0].playlist_total} playlists
-            and {imports.value[0].artist_total} followed artists.
+            Selected from Spotify: {imports.value[0].playlist_total} playlists ·{" "}
+            {imports.value[0].playlist_track_total} playlist tracks ·{" "}
+            {imports.value[0].saved_track_total} Liked Songs ·{" "}
+            {imports.value[0].artist_total} followed artists.
           </p>
           <p class="mt-1">
             {imports.value[0].playlists_imported} playlists created ·{" "}
+            {imports.value[0].playlist_tracks_imported} playlist tracks added ·{" "}
+            {imports.value[0].saved_tracks_imported} Liked Songs saved ·{" "}
             {imports.value[0].artists_followed} artists followed ·{" "}
             {imports.value[0].unmatched_items} unmatched
           </p>
