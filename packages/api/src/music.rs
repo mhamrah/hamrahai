@@ -19,7 +19,9 @@ use crate::{auth::require_session_or_claims, db::DbPool};
 mod import;
 
 const SPOTIFY_SCOPES: &str = "user-read-private playlist-read-private playlist-read-collaborative user-follow-read user-library-read";
-const TIDAL_SCOPES: &str = "playlists.write collection.write search.read user.read";
+// TIDAL's third-party playlist mutations require both `playlists.write` and
+// `w_usr`; omitting the latter is reported as a 404 by the API.
+const TIDAL_SCOPES: &str = "playlists.write collection.write search.read user.read w_usr";
 
 #[derive(Deserialize)]
 pub struct BeginConnectionRequest {
@@ -698,6 +700,7 @@ fn public_import_failure_message(failure: &import::ImportFailure, import_id: Uui
     } else {
         match failure.progress.stage {
             "reading_spotify" => "Spotify could not read the selected music. No changes were made in TIDAL. Reconnect Spotify, then restart this import.".to_string(),
+            "creating_playlists" if failure.message.contains("TIDAL returned 404 Not Found for /v2/playlists") => "TIDAL needs updated playlist permission. Reconnect TIDAL, then restart to retry this import safely.".to_string(),
             "creating_playlists" => "TIDAL could not create the destination playlist after Spotify was read successfully. Restart to retry safely; reconnect TIDAL only if this repeats.".to_string(),
             "adding_playlist_tracks" if failure.message.contains("400 Bad Request") => format!(
                 "TIDAL rejected Hamrah's track-matching request while adding playlist songs. Spotify was read successfully and {} TIDAL {} already created. Restart to retry safely; reconnecting Spotify will not help.",
@@ -1011,6 +1014,29 @@ mod tests {
         assert!(request.include_owned_playlists);
         assert!(request.include_followed_artists);
         assert!(!request.include_saved_tracks);
+    }
+    #[test]
+    fn tidal_authorization_requests_the_required_playlist_write_scope_pair() {
+        let scopes = TIDAL_SCOPES.split_whitespace().collect::<Vec<_>>();
+        assert!(scopes.contains(&"playlists.write"));
+        assert!(scopes.contains(&"w_usr"));
+    }
+    #[test]
+    fn playlist_permission_failures_tell_the_user_to_reconnect_tidal() {
+        let import_id = Uuid::parse_str("da34e2d8-94a4-4b54-9223-a61fc11feb9b").unwrap();
+        let failure = import::ImportFailure {
+            message: "TIDAL returned 404 Not Found for /v2/playlists".to_string(),
+            outcome: import::ImportOutcome::default(),
+            progress: import::ImportProgress {
+                stage: "creating_playlists",
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(
+            public_import_failure_message(&failure, import_id),
+            "TIDAL needs updated playlist permission. Reconnect TIDAL, then restart to retry this import safely. Reference: da34e2d8."
+        );
     }
     #[test]
     fn track_lookup_failures_explain_the_real_stage_and_preserve_a_reference() {
