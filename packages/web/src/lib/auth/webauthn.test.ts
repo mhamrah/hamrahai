@@ -107,14 +107,16 @@ describe("WebAuthnClient", () => {
           success: true,
           challenge_id: "challenge-123",
           options: {
-            challenge: "ZmFrZS1jaGFsbGVuZ2U",
-            rp: { id: "hamrah.app", name: "Hamrah App" },
-            user: {
-              id: "dXNlci0xMjM",
-              name: "passkey@example.com",
-              displayName: "Passkey User",
+            publicKey: {
+              challenge: "ZmFrZS1jaGFsbGVuZ2U",
+              rp: { id: "hamrah.app", name: "Hamrah App" },
+              user: {
+                id: "dXNlci0xMjM",
+                name: "passkey@example.com",
+                displayName: "Passkey User",
+              },
+              pubKeyCredParams: [{ type: "public-key", alg: -7 }],
             },
-            pubKeyCredParams: [{ type: "public-key", alg: -7 }],
           },
         })
         .mockResolvedValueOnce({
@@ -144,6 +146,18 @@ describe("WebAuthnClient", () => {
           display_name: "Passkey User",
         },
       );
+      expect(startRegistration).toHaveBeenCalledWith({
+        optionsJSON: {
+          challenge: "ZmFrZS1jaGFsbGVuZ2U",
+          rp: { id: "hamrah.app", name: "Hamrah App" },
+          user: {
+            id: "dXNlci0xMjM",
+            name: "passkey@example.com",
+            displayName: "Passkey User",
+          },
+          pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+        },
+      });
       expect(mockApiClient.post).toHaveBeenNthCalledWith(
         2,
         "/api/webauthn/register/verify",
@@ -240,6 +254,37 @@ describe("WebAuthnClient", () => {
   });
 
   describe("authenticateWithDiscoverablePasskey", () => {
+    it("passes the publicKey options to the browser authenticator", async () => {
+      mockApiClient.post
+        .mockResolvedValueOnce({
+          success: true,
+          challenge_id: "challenge-123",
+          options: {
+            publicKey: {
+              challenge: "ZmFrZS1jaGFsbGVuZ2U",
+              rpId: "hamrah.app",
+              userVerification: "preferred",
+            },
+          },
+        })
+        .mockResolvedValueOnce({ success: true, user: { id: "user-123" } });
+      vi.mocked(startAuthentication).mockResolvedValueOnce({
+        id: "credential-123",
+      } as any);
+
+      const result = await authenticateWithDiscoverablePasskey();
+
+      expect(result).toEqual({ success: true, user: { id: "user-123" } });
+      expect(startAuthentication).toHaveBeenCalledWith({
+        optionsJSON: {
+          challenge: "ZmFrZS1jaGFsbGVuZ2U",
+          rpId: "hamrah.app",
+          userVerification: "preferred",
+        },
+        useBrowserAutofill: false,
+      });
+    });
+
     it("should return a friendly message when begin returns malformed options", async () => {
       mockApiClient.post.mockResolvedValue({
         success: true,
