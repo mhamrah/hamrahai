@@ -118,9 +118,9 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
           await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
         const active = imports.value.find(isActiveImport);
         if (active) {
-          importActivity.value = await createApiClient().get<MusicImportActivityWire[]>(
-            `/v1/music/imports/${active.id}/activity`,
-          );
+          importActivity.value = await createApiClient().get<
+            MusicImportActivityWire[]
+          >(`/v1/music/imports/${active.id}/activity`);
           loadedActivityFor.value = active.id;
         }
       } catch {
@@ -257,12 +257,15 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     }
     error.value = undefined;
     try {
-      unmatchedTracks.value = await createApiClient().get<MusicUnmatchedTrackWire[]>(
-        `/v1/music/imports/${importId}/unmatched-tracks`,
-      );
+      unmatchedTracks.value = await createApiClient().get<
+        MusicUnmatchedTrackWire[]
+      >(`/v1/music/imports/${importId}/unmatched-tracks`);
       loadedUnmatchedFor.value = importId;
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : "Unable to load unmatched songs.";
+      error.value =
+        cause instanceof Error
+          ? cause.message
+          : "Unable to load unmatched songs.";
     }
   });
 
@@ -275,12 +278,15 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     }
     error.value = undefined;
     try {
-      importActivity.value = await createApiClient().get<MusicImportActivityWire[]>(
-        `/v1/music/imports/${importId}/activity`,
-      );
+      importActivity.value = await createApiClient().get<
+        MusicImportActivityWire[]
+      >(`/v1/music/imports/${importId}/activity`);
       loadedActivityFor.value = importId;
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : "Unable to load import activity.";
+      error.value =
+        cause instanceof Error
+          ? cause.message
+          : "Unable to load import activity.";
     }
   });
 
@@ -294,7 +300,10 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         importActivity.value = [];
       }
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : "Unable to remove import history.";
+      error.value =
+        cause instanceof Error
+          ? cause.message
+          : "Unable to remove import history.";
     }
   });
 
@@ -302,10 +311,12 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     <section>
       <h2 class="text-xl font-semibold text-gray-950">Music management</h2>
       <p class="mt-2 text-sm leading-6 text-gray-600">
-        Syncs owned playlists in both directions using exact ISRC matches.
-        Same-name TIDAL playlists are merged into one complete copy before the
-        extras are removed. Provider rate limits pause and resume automatically;
-        removing music from either provider never removes it from the other.
+        Syncs owned playlists in both directions. Spotify-to-TIDAL matches use
+        ISRC first, then exact title and artist when releases use different
+        ISRCs; TIDAL-to-Spotify matches remain ISRC-only. Same-name TIDAL
+        playlists are merged into one complete copy before the extras are
+        removed. Provider rate limits pause and resume automatically; removing
+        music from either provider never removes it from the other.
       </p>
       {error.value && (
         <p class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
@@ -373,8 +384,9 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         Also import playlists saved in my Spotify library
       </label>
       <p class="mt-3 text-sm text-gray-600">
-        Liked Songs always sync in both directions when the ISRC matches exactly.
-        Removing music from either provider never removes it from the other.
+        Liked Songs use the same directional matching rules and always sync
+        additively. Removing music from either provider never removes it from
+        the other.
       </p>
       <button
         class="mt-4 w-full rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white transition active:scale-[0.99] disabled:cursor-wait disabled:opacity-50 sm:w-auto"
@@ -405,104 +417,126 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         <section class="mt-6">
           <h3 class="text-base font-semibold text-gray-950">Sync history</h3>
           <p class="mt-1 text-sm text-gray-600">
-            Each check records what synced, what could not be matched, and any provider error.
+            Each check records what synced, what could not be matched, and any
+            provider error.
           </p>
           <div class="mt-3 space-y-3">
             {imports.value.map((run) => (
-        <div key={run.id} class="rounded-md bg-gray-50 p-3 text-sm text-gray-600">
-          <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <p class="font-medium text-gray-950">
-            {importStage(run)}
-          </p>
-          <p class="text-xs text-gray-500">{formatSyncTime(run.created_at)}</p>
-          </div>
-          <p class="mt-1">
-            Selected from Spotify: {run.playlist_total} playlists ·{" "}
-            {run.playlist_track_total} playlist tracks ·{" "}
-            {run.saved_track_total} Liked Songs ·{" "}
-            {run.artist_total} followed artists.
-          </p>
-          <p class="mt-2 rounded bg-white px-2 py-1 text-xs text-gray-700" aria-live="polite">
-            Current activity: {run.activity}
-          </p>
-          <p class="mt-1">
-            {run.playlists_imported} playlists created ·{" "}
-            {run.playlist_tracks_imported} playlist tracks added ·{" "}
-            {run.saved_tracks_imported} Liked Songs saved ·{" "}
-            {run.artists_followed} artists followed ·{" "}
-            {run.unmatched_items} unmatched
-          </p>
-          {canRestartImport(run) && (
-            <p class="mt-1">
-              Restarting reuses this import's original TIDAL idempotency keys.
-            </p>
-          )}
-          {run.error && (
-            <p class="mt-1 text-red-700">{run.error}</p>
-          )}
-          {run.unmatched_items > 0 && (
-            <button
-              class="mt-3 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800"
-              onClick$={() => loadUnmatchedTracks(run.id)}
-            >
-              {loadedUnmatchedFor.value === run.id
-                ? "Hide unsupported songs"
-                : `Review ${run.unmatched_items} unsupported songs`}
-            </button>
-          )}
-          <div class="mt-3 flex flex-wrap gap-2">
-            <button
-              class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800"
-              onClick$={() => loadActivity(run.id)}
-            >
-              {loadedActivityFor.value === run.id && !isActiveImport(run)
-                ? "Hide activity"
-                : "View activity"}
-            </button>
-            {!isActiveImport(run) && (
-              <button
-                class="rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700"
-                onClick$={() => removeImport(run.id)}
+              <div
+                key={run.id}
+                class="rounded-md bg-gray-50 p-3 text-sm text-gray-600"
               >
-                Remove history
-              </button>
-            )}
-          </div>
-          {loadedActivityFor.value === run.id && (
-            <ol class="mt-3 max-h-56 divide-y divide-gray-200 overflow-y-auto rounded-md border border-gray-200 bg-white">
-              {importActivity.value.map((activity) => (
-                <li key={activity.id} class="p-3 text-xs text-gray-700">
-                  <span>{activity.message}</span>
-                  <span class="ml-2 text-gray-500">{formatSyncTime(activity.created_at)}</span>
-                </li>
-              ))}
-              {importActivity.value.length === 0 && (
-                <li class="p-3 text-xs text-gray-600">Activity is not available for this older import.</li>
-              )}
-            </ol>
-          )}
-          {loadedUnmatchedFor.value === run.id && (
-            <ul class="mt-3 divide-y divide-gray-200 rounded-md border border-gray-200 bg-white">
-              {unmatchedTracks.value.map((track) => (
-                <li key={track.id} class="p-3">
-                  <p class="font-medium text-gray-950">{track.track_name}</p>
-                  <p class="text-sm text-gray-600">
-                    {[track.artist_name, track.album_name].filter(Boolean).join(" · ") || "Spotify metadata unavailable"}
+                <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <p class="font-medium text-gray-950">{importStage(run)}</p>
+                  <p class="text-xs text-gray-500">
+                    {formatSyncTime(run.created_at)}
                   </p>
-                  <p class="mt-1 text-xs text-gray-500">
-                    {track.source_collection} · {track.reason === "missing_isrc" ? "The service did not provide an ISRC" : track.reason === "not_available_in_spotify" ? "No exact ISRC match was found in Spotify" : "No exact ISRC match was found in TIDAL"}
+                </div>
+                <p class="mt-1">
+                  Selected from Spotify: {run.playlist_total} playlists ·{" "}
+                  {run.playlist_track_total} playlist tracks ·{" "}
+                  {run.saved_track_total} Liked Songs · {run.artist_total}{" "}
+                  followed artists.
+                </p>
+                <p
+                  class="mt-2 rounded bg-white px-2 py-1 text-xs text-gray-700"
+                  aria-live="polite"
+                >
+                  Current activity: {run.activity}
+                </p>
+                <p class="mt-1">
+                  {run.playlists_imported} playlists created ·{" "}
+                  {run.playlist_tracks_imported} playlist tracks added ·{" "}
+                  {run.saved_tracks_imported} Liked Songs saved ·{" "}
+                  {run.artists_followed} artists followed ·{" "}
+                  {run.unmatched_items} unmatched
+                </p>
+                {canRestartImport(run) && (
+                  <p class="mt-1">
+                    Restarting reuses this import's original TIDAL idempotency
+                    keys.
                   </p>
-                </li>
-              ))}
-              {unmatchedTracks.value.length === 0 && (
-                <li class="p-3 text-sm text-gray-600">This import predates detailed tracking, so individual songs are unavailable.</li>
-              )}
-            </ul>
-          )}
-          <p class="mt-1 text-xs text-gray-500">
-            Import reference: {run.id.slice(0, 8)}
-          </p>
-        </div>
+                )}
+                {run.error && <p class="mt-1 text-red-700">{run.error}</p>}
+                {run.unmatched_items > 0 && (
+                  <button
+                    class="mt-3 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800"
+                    onClick$={() => loadUnmatchedTracks(run.id)}
+                  >
+                    {loadedUnmatchedFor.value === run.id
+                      ? "Hide unsupported songs"
+                      : `Review ${run.unmatched_items} unsupported songs`}
+                  </button>
+                )}
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <button
+                    class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800"
+                    onClick$={() => loadActivity(run.id)}
+                  >
+                    {loadedActivityFor.value === run.id && !isActiveImport(run)
+                      ? "Hide activity"
+                      : "View activity"}
+                  </button>
+                  {!isActiveImport(run) && (
+                    <button
+                      class="rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700"
+                      onClick$={() => removeImport(run.id)}
+                    >
+                      Remove history
+                    </button>
+                  )}
+                </div>
+                {loadedActivityFor.value === run.id && (
+                  <ol class="mt-3 max-h-56 divide-y divide-gray-200 overflow-y-auto rounded-md border border-gray-200 bg-white">
+                    {importActivity.value.map((activity) => (
+                      <li key={activity.id} class="p-3 text-xs text-gray-700">
+                        <span>{activity.message}</span>
+                        <span class="ml-2 text-gray-500">
+                          {formatSyncTime(activity.created_at)}
+                        </span>
+                      </li>
+                    ))}
+                    {importActivity.value.length === 0 && (
+                      <li class="p-3 text-xs text-gray-600">
+                        Activity is not available for this older import.
+                      </li>
+                    )}
+                  </ol>
+                )}
+                {loadedUnmatchedFor.value === run.id && (
+                  <ul class="mt-3 divide-y divide-gray-200 rounded-md border border-gray-200 bg-white">
+                    {unmatchedTracks.value.map((track) => (
+                      <li key={track.id} class="p-3">
+                        <p class="font-medium text-gray-950">
+                          {track.track_name}
+                        </p>
+                        <p class="text-sm text-gray-600">
+                          {[track.artist_name, track.album_name]
+                            .filter(Boolean)
+                            .join(" · ") || "Spotify metadata unavailable"}
+                        </p>
+                        <p class="mt-1 text-xs text-gray-500">
+                          {track.source_collection} ·{" "}
+                          {track.reason === "missing_isrc"
+                            ? "The service did not provide an ISRC"
+                            : track.reason === "not_available_in_spotify"
+                              ? "No exact ISRC match was found in Spotify"
+                              : "No ISRC or exact title-and-artist match was found in TIDAL"}
+                        </p>
+                      </li>
+                    ))}
+                    {unmatchedTracks.value.length === 0 && (
+                      <li class="p-3 text-sm text-gray-600">
+                        This import predates detailed tracking, so individual
+                        songs are unavailable.
+                      </li>
+                    )}
+                  </ul>
+                )}
+                <p class="mt-1 text-xs text-gray-500">
+                  Import reference: {run.id.slice(0, 8)}
+                </p>
+              </div>
             ))}
           </div>
         </section>

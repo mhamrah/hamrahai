@@ -73,10 +73,10 @@ struct MusicImportDTO: Codable, Identifiable {
         case "reading_spotify": "Reading selected Spotify collections"
         case "creating_playlists": "Creating TIDAL playlists"
         case "reconciling_tidal_playlists": "Reconciling existing TIDAL playlists with Spotify"
-        case "adding_playlist_tracks": "Adding exact playlist-track matches to TIDAL"
+        case "adding_playlist_tracks": "Adding matched playlist tracks to TIDAL"
         case "matching_artists": "Finding exact artist matches in TIDAL"
         case "following_artists": "Following exact artist matches in TIDAL"
-        case "saving_liked_tracks": "Saving exact Liked Song matches to TIDAL"
+        case "saving_liked_tracks": "Saving matched Liked Songs to TIDAL"
         case "completed": status == "partial" ? "Completed with unmatched items" : "Completed"
         case "failed": "Import failed"
         default: stage.replacingOccurrences(of: "_", with: " ").capitalized
@@ -138,7 +138,7 @@ struct MusicUnmatchedTrackDTO: Codable, Identifiable {
 
     var reasonDescription: String {
         if reason == "missing_isrc" { return "The service did not provide an ISRC" }
-        return reason == "not_available_in_spotify" ? "No exact ISRC match was found in Spotify" : "No exact ISRC match was found in TIDAL"
+        return reason == "not_available_in_spotify" ? "No exact ISRC match was found in Spotify" : "No ISRC or exact title-and-artist match was found in TIDAL"
     }
 }
 
