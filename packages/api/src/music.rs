@@ -241,6 +241,15 @@ fn music_connection_error_redirect(redirect_path: &str, provider: &str, reason: 
 fn env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("{name} is not configured"))
 }
+
+fn normalized_import_task_secret(secret: &str) -> Result<&str, String> {
+    let secret = secret.trim();
+    if secret.is_empty() {
+        Err("MUSIC_IMPORT_TASK_SECRET is empty".to_string())
+    } else {
+        Ok(secret)
+    }
+}
 fn hash_state(state: &str) -> String {
     Sha256::digest(state.as_bytes())
         .iter()
@@ -994,7 +1003,7 @@ async fn enqueue_import_task(import_id: Uuid) -> Result<(), String> {
         import_id,
         "/execute"
     );
-    let task_secret = env("MUSIC_IMPORT_TASK_SECRET")?;
+    let task_secret = normalized_import_task_secret(&env("MUSIC_IMPORT_TASK_SECRET")?)?.to_string();
     let task_service_account = env("MUSIC_IMPORT_TASK_SERVICE_ACCOUNT")?;
     let token = cloud_tasks_access_token().await?;
     let body = STANDARD.encode(serde_json::json!({ "import_id": import_id }).to_string());
@@ -1297,18 +1306,25 @@ pub async fn execute_import_task(
     headers: HeaderMap,
     Path(import_id): Path<Uuid>,
 ) -> Response {
-    let expected_secret = match env("MUSIC_IMPORT_TASK_SECRET") {
+    let expected_secret = match env("MUSIC_IMPORT_TASK_SECRET")
+        .and_then(|value| normalized_import_task_secret(&value).map(str::to_owned))
+    {
         Ok(value) => value,
         Err(error_message) => {
             tracing::error!(%error_message, "music import task secret is unavailable");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    if headers
+    let received_secret = headers
         .get("x-hamrah-import-task-secret")
         .and_then(|value| value.to_str().ok())
-        != Some(expected_secret.as_str())
-    {
+        .map(str::trim);
+    if received_secret != Some(expected_secret.as_str()) {
+        tracing::warn!(
+            %import_id,
+            task_secret_header_present = received_secret.is_some(),
+            "rejected music import task with invalid worker authentication"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     let claimed = match sqlx::query_as::<_, (Uuid, bool, bool, bool, bool)>("UPDATE music_import_runs SET status = 'running', stage = 'preparing', activity = 'Background worker started', worker_started_at = NOW(), task_attempts = task_attempts + 1, progress_updated_at = NOW() WHERE id = $1 AND status = 'queued' RETURNING user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
@@ -1432,6 +1448,14 @@ mod tests {
     #[test]
     fn state_hashes_without_retaining_value() {
         assert_ne!(hash_state("secret"), "secret");
+    }
+    #[test]
+    fn import_task_secret_ignores_secret_manager_line_endings() {
+        assert_eq!(
+            normalized_import_task_secret("worker-secret\n").unwrap(),
+            "worker-secret"
+        );
+        assert!(normalized_import_task_secret(" \n ").is_err());
     }
     #[test]
     fn encrypted_token_does_not_contain_plaintext() {
