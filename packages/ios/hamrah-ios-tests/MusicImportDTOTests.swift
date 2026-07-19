@@ -48,6 +48,24 @@ struct MusicImportDTOTests {
     }
 
     @Test
+    func reconciliationStageAndScheduledActivityRemainVisible() {
+        let reconciling = makeImport(
+            stage: "reconciling_tidal_playlists",
+            activity: "Consolidating TIDAL playlist content: Favorites"
+        )
+        let scheduled = makeImport(
+            status: "queued",
+            stage: "queued",
+            activity: "Waiting for provider rate limit; the import will resume automatically"
+        )
+
+        #expect(reconciling.stageDescription == "Reconciling existing TIDAL playlists with Spotify")
+        #expect(reconciling.activity == "Consolidating TIDAL playlist content: Favorites")
+        #expect(scheduled.isActive)
+        #expect(scheduled.activity == "Waiting for provider rate limit; the import will resume automatically")
+    }
+
+    @Test
     func transferSummaryShowsTransferredItemsOutOfTheSelectedTotal() {
         let musicImport = makeImport(
             stage: "creating_playlists",
@@ -125,6 +143,7 @@ struct MusicImportDTOTests {
         playlistTracksImported: Int = 0,
         savedTrackTotal: Int = 0,
         savedTracksImported: Int = 0,
+        activity: String = "Preparing secure connections",
         error: String? = nil
     ) -> MusicImportDTO {
         MusicImportDTO(
@@ -149,6 +168,7 @@ struct MusicImportDTOTests {
             saved_track_total: savedTrackTotal,
             saved_tracks_imported: savedTracksImported,
             tracks_matched: playlistTracksImported + savedTracksImported,
+            activity: activity,
             error: error,
             created_at: "2026-07-17T00:00:00Z"
         )

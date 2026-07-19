@@ -32,7 +32,7 @@ async fn webauthn_register_begin_skeleton() -> Result<()> {
     let user_id = std::env::var("TEST_USER_ID")
         .ok()
         .and_then(|s| Uuid::try_parse(&s).ok())
-        .unwrap_or_else(|| Uuid::new_v4());
+        .unwrap_or_else(Uuid::new_v4);
 
     let email = std::env::var("TEST_USER_EMAIL")
         .unwrap_or_else(|_| "webauthn-test@example.com".to_string());

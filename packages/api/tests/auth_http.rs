@@ -66,6 +66,11 @@ async fn setup_router() -> anyhow::Result<Option<(DbPool, Router)>> {
             env::set_var("JWT_SECRET", "test-jwt-secret-for-http-auth-tests");
         }
     }
+    if env::var("MUSIC_IMPORT_TASK_SECRET").is_err() {
+        unsafe {
+            env::set_var("MUSIC_IMPORT_TASK_SECRET", "test-music-import-task-secret");
+        }
+    }
     let pool = init_pool().await?;
     run_migrations(&pool).await?;
     let router = create_router(pool.clone());
@@ -89,7 +94,7 @@ async fn http_validate_without_token_returns_false() -> anyhow::Result<()> {
 
     let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let parsed: ValidateResponse = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(parsed.valid, false);
+    assert!(!parsed.valid);
 
     Ok(())
 }
@@ -443,6 +448,129 @@ async fn http_music_import_list_marks_stalled_run_restartable() -> anyhow::Resul
         imports[0]["error"].as_str(),
         Some("music import stopped reporting progress; restart it to continue safely")
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_music_import_list_keeps_scheduled_retry_active() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-scheduled-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Scheduled Test")).await?;
+    let raw_session = Uuid::new_v4().to_string();
+    create_session(&pool, user.id, &raw_session, 6).await?;
+    let import_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,status,stage,activity,started_at,progress_updated_at,next_attempt_at) VALUES ($1,$2,'spotify','tidal','queued','queued','Waiting for Spotify rate limit',NOW(),NOW() - INTERVAL '6 minutes',NOW() + INTERVAL '1 hour')")
+        .bind(import_id)
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/music/imports")
+        .header("cookie", format!("session={raw_session}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let imports: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(imports.len(), 1);
+    assert_eq!(imports[0]["status"], "queued");
+    assert_eq!(imports[0]["stage"], "queued");
+    assert_eq!(
+        imports[0]["activity"].as_str(),
+        Some("Waiting for Spotify rate limit")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_music_import_task_retry_reclaims_its_running_job() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-task-retry-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Task Retry Test")).await?;
+    let import_id = Uuid::new_v4();
+    let task_name = format!("projects/test/locations/test/queues/test/tasks/{import_id}");
+    sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,status,stage,activity,started_at,progress_updated_at,worker_task_name) VALUES ($1,$2,'spotify','tidal','running','preparing','Background worker started',NOW(),NOW() - INTERVAL '4 minutes',$3)")
+        .bind(import_id)
+        .bind(user.id)
+        .bind(&task_name)
+        .execute(&pool)
+        .await?;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/internal/music-imports/{import_id}/execute"))
+        .header(
+            "x-hamrah-import-task-secret",
+            env::var("MUSIC_IMPORT_TASK_SECRET")?,
+        )
+        .header("x-cloudtasks-taskname", &task_name)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let (status, task_attempts, worker_task_name): (String, i32, Option<String>) = sqlx::query_as(
+        "SELECT status, task_attempts, worker_task_name FROM music_import_runs WHERE id = $1",
+    )
+    .bind(import_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(status, "failed");
+    assert_eq!(task_attempts, 1);
+    assert_eq!(worker_task_name, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_music_import_task_retry_does_not_overlap_a_live_worker() -> anyhow::Result<()> {
+    let Some((pool, router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-task-lease-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Task Lease Test")).await?;
+    let import_id = Uuid::new_v4();
+    let task_name = format!("projects/test/locations/test/queues/test/tasks/{import_id}");
+    sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,status,stage,activity,started_at,progress_updated_at,worker_task_name) VALUES ($1,$2,'spotify','tidal','running','preparing','Background worker started',NOW(),NOW(),$3)")
+        .bind(import_id)
+        .bind(user.id)
+        .bind(&task_name)
+        .execute(&pool)
+        .await?;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/internal/music-imports/{import_id}/execute"))
+        .header(
+            "x-hamrah-import-task-secret",
+            env::var("MUSIC_IMPORT_TASK_SECRET")?,
+        )
+        .header("x-cloudtasks-taskname", &task_name)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let (status, task_attempts): (String, i32) =
+        sqlx::query_as("SELECT status, task_attempts FROM music_import_runs WHERE id = $1")
+            .bind(import_id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(status, "running");
+    assert_eq!(task_attempts, 0);
 
     Ok(())
 }

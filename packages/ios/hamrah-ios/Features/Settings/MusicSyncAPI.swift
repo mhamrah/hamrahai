@@ -40,6 +40,7 @@ struct MusicImportDTO: Codable, Identifiable {
     let saved_track_total: Int
     let saved_tracks_imported: Int
     let tracks_matched: Int
+    let activity: String
     let error: String?
     let created_at: String
 
@@ -60,6 +61,7 @@ struct MusicImportDTO: Codable, Identifiable {
             return switch stage {
             case "reading_spotify": "Import failed while reading Spotify"
             case "creating_playlists": "Import failed while creating TIDAL playlists"
+            case "reconciling_tidal_playlists": "Import failed while reconciling existing TIDAL playlists"
             case "adding_playlist_tracks": "Import failed while matching or adding playlist tracks"
             case "matching_artists", "following_artists": "Import failed while matching or following artists"
             case "saving_liked_tracks": "Import failed while saving Liked Songs"
@@ -70,6 +72,7 @@ struct MusicImportDTO: Codable, Identifiable {
         case "queued", "preparing": "Preparing secure connections"
         case "reading_spotify": "Reading selected Spotify collections"
         case "creating_playlists": "Creating TIDAL playlists"
+        case "reconciling_tidal_playlists": "Reconciling existing TIDAL playlists with Spotify"
         case "adding_playlist_tracks": "Adding exact playlist-track matches to TIDAL"
         case "matching_artists": "Finding exact artist matches in TIDAL"
         case "following_artists": "Following exact artist matches in TIDAL"

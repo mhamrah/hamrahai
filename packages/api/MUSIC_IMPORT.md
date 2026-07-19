@@ -1,146 +1,178 @@
-# Spotify to TIDAL import
+# Spotify and TIDAL reconciliation
 
 ## Product contract
 
-Hamrah provides a one-way, user-authorized import from Spotify to TIDAL.
+Hamrah performs an additive, user-authorized reconciliation between Spotify and
+TIDAL.
 
-- Spotify is a read-only source. Hamrah never writes to Spotify.
-- TIDAL is the destination. Hamrah creates playlists, copies playlist tracks,
-  saves Spotify Liked Songs to the TIDAL collection, and follows artists.
-- Tracks are copied only when Spotify and TIDAL report the same ISRC. Missing,
-  ambiguous, local, or non-track Spotify items are reported as unmatched;
-  Hamrah never uses title/artist heuristics for tracks.
-- Artwork and playlist descriptions are not transferred.
-- A public Spotify playlist creates a public TIDAL playlist. Every other Spotify
-  playlist creates an unlisted TIDAL playlist, because TIDAL's third-party API
-  does not expose a private playlist access type.
-- Owned Spotify playlists are selected by default. The user can also select
+- Owned Spotify playlists participate by default. The user can also include
   playlists saved in their Spotify library.
-- Spotify Liked Songs are optional. Selecting them requires Spotify's
-  `user-library-read` permission; playlist-track imports do not.
-- An artist is followed only when TIDAL search returns an exact name match
-  (case and whitespace insensitive). Ambiguous or absent matches are reported
-  as unmatched; Hamrah never guesses.
-- TIDAL collection data is never enumerated or exported.
+- When owned TIDAL playlists are included, a Spotify playlist and every TIDAL
+  playlist with the same case- and whitespace-insensitive name form one
+  reconciliation group.
+- Hamrah treats same-name TIDAL playlists as duplicate copies from earlier
+  Hamrah runs. It merges the union of their songs into one surviving TIDAL
+  playlist, reconciles that union with Spotify, and only then removes the extra
+  TIDAL playlists.
+- A saved Spotify-to-TIDAL mapping is preferred only while that TIDAL playlist
+  still exists. A stale mapping falls back to a present same-name playlist or a
+  newly created playlist.
+- Songs present only in Spotify are added to the surviving TIDAL playlist.
+  Songs present only in the TIDAL group are added to the matching Spotify
+  playlist.
+- A TIDAL playlist without a Spotify counterpart creates a private Spotify
+  playlist. Its same-name TIDAL copies are consolidated before removal.
+- Reconciliation is additive. Removing a song from either provider does not
+  remove it from the other provider.
+- Cross-provider song matches require an exact normalized ISRC. Missing or
+  unavailable ISRCs are reported as unmatched; title/artist heuristics are not
+  used.
+- Duplicate TIDAL content is copied directly by TIDAL track ID before a
+  playlist is deleted. If TIDAL skips any of those writes, the run fails safely
+  and keeps the duplicate playlists.
+- Spotify Liked Songs reconciliation is optional and additive in both
+  directions. Followed artists continue to flow from Spotify to an exact-name
+  TIDAL match.
+- Artwork and playlist descriptions are not transferred.
+- A newly created TIDAL playlist is public when its Spotify source is public
+  and unlisted otherwise.
 
 ## Architecture
 
-`src/music.rs` owns OAuth, encrypted token storage, token refresh, API routes,
-and import-run persistence. `src/music/import.rs` owns provider requests and
-the deterministic transfer behavior.
+`src/music.rs` owns OAuth, encrypted token storage, import persistence, Cloud
+Tasks scheduling, worker leases, and API routes. `src/music/import.rs` owns the
+provider contracts and deterministic reconciliation behavior.
 
-`POST /v1/music/imports` performs one bounded import request synchronously.
-While it runs, `GET /v1/music/imports` exposes the active run's stage and
-collection-specific counts, so clients can show what is selected and its live
-progress:
+`POST /v1/music/imports` creates a queued `music_import_runs` row and enqueues a
+Cloud Task. `POST /internal/music-imports/{id}/execute` claims the run and
+executes it. Clients poll `GET /v1/music/imports` and
+`GET /v1/music/imports/{id}/activity`.
 
-- selected Spotify playlists, playlist tracks, Liked Songs, and followed artists;
-- TIDAL playlists created;
-- playlist tracks added and Liked Songs saved;
-- Spotify artists checked for an exact TIDAL match; and
-- exact matches successfully followed.
+The stages are:
 
-The stages are `preparing`, `reading_spotify`, `creating_playlists`,
-`adding_playlist_tracks`, `matching_artists`, `following_artists`, and
-`saving_liked_tracks`, followed by a terminal status.
+1. `preparing`
+2. `reading_spotify`
+3. `creating_playlists`
+4. `reconciling_tidal_playlists`
+5. `adding_playlist_tracks`
+6. `matching_artists`
+7. `following_artists`
+8. `saving_liked_tracks`
+9. `completed` or `failed`
 
-The import itself performs these steps:
+Each run:
 
-1. Load or refresh each encrypted provider token.
-2. Read the selected Spotify playlist metadata, tracks, Liked Songs, and
-   followed artists. Spotify's `user-library-read` permission is required to
-   read Liked Songs.
-3. Create TIDAL playlists with the source visibility mapping.
-4. Resolve Spotify track ISRCs against TIDAL in batches of at most 50, then add
-   exact matches to the corresponding TIDAL playlist or the user's TIDAL
-   collection. TIDAL's array filter is encoded as one repeated
-   `filter[isrc]` query parameter per ISRC.
-5. Search TIDAL for exact artist-name matches and follow matches in batches of
-   at most 50.
-6. Persist progress and a completed, partial, or failed `music_import_runs` row.
+1. Loads or refreshes both encrypted provider tokens.
+2. Reads selected Spotify collections and owned TIDAL playlists.
+3. Reads every selected playlist's tracks.
+4. Groups same-name playlists, chooses a present canonical TIDAL playlist, and
+   copies all TIDAL duplicate content into it.
+5. Adds exact-ISRC Spotify-only songs to TIDAL and TIDAL-only songs to Spotify.
+6. Persists the Spotify/TIDAL mapping and reconciled content hash.
+7. Deletes extra same-name TIDAL playlists only after their content is safe in
+   the canonical playlist.
+8. Reconciles optional Liked Songs and followed artists.
+9. Persists a completed, partial, or failed result plus unmatched-song details.
 
-If Spotify denies access to an individual playlist, the import skips that
-playlist, records it as unmatched, and completes the remaining collections as
-a partial import. The run tells the user to restore access and retry safely.
+An inaccessible Spotify playlist is skipped and recorded as unmatched without
+stopping other collections.
 
-TIDAL write requests use an import-run-specific idempotency key. The database
-also permits only one queued or running import per Hamrah user.
+## Durable execution and rate limits
 
-TIDAL API requests are serialized at one request per second. If TIDAL responds
-with `429 Too Many Requests`, the importer respects its `Retry-After` value
-and retries up to three times; write retries retain the original idempotency
-key.
+Cloud Run and Cloud Tasks both allow 30 minutes for the worker request. The
+worker uses a 28-minute internal budget so it can checkpoint and enqueue a new
+task before the request deadline.
 
-## Failures and restart safety
+The worker:
 
-If an import fails or completes partially, clients show a retry action. Retrying
-reuses the original import run and its TIDAL idempotency keys, rather than
-creating a second run. This safely replays incomplete work without creating a
-duplicate TIDAL playlist or artist relationship.
+- records the Cloud Task name as its lease owner;
+- updates a database heartbeat every minute;
+- rejects an overlapping retry while the current lease is fresh;
+- lets the same Cloud Task reclaim the run after a three-minute stale lease;
+- schedules a new task and records `next_attempt_at` before acknowledging a
+  long provider backoff; and
+- treats a future scheduled retry as active instead of failing it under the
+  normal five-minute stale-run check.
 
-Failure responses retain the provider operation that failed and a short import
-reference that can be matched to structured Cloud Run logs. Clients must not
-tell users to reconnect both providers for a provider request-shape or service
-failure. Reconnection guidance is reserved for an account, scope, or token
-error.
+Cloud Tasks removes a task after any 2xx worker response. The handler therefore
+returns 2xx only after the run reaches a terminal state or a successor task is
+durably scheduled. A transient scheduling failure returns 5xx so Cloud Tasks
+retains and retries the current task.
+
+Spotify and TIDAL requests retry short `429 Too Many Requests` waits inline.
+A `Retry-After` longer than 15 seconds is converted into a scheduled Cloud Task
+instead of sleeping inside Cloud Run. Spotify ISRC search results are cached
+after each lookup so a later rate limit does not discard completed catalog
+work. TIDAL write retries retain stable import-specific idempotency keys.
+
+## Restart and data safety
+
+Only one queued or running import is allowed per Hamrah user. A failed or
+partial import must be restarted rather than replaced with a new run.
+
+Restarting reuses:
+
+- the import ID and TIDAL idempotency keys;
+- per-import Spotify/TIDAL playlist mappings; and
+- the user's last successful playlist mappings.
+
+Mapping upserts repair stale IDs when a surviving TIDAL playlist changes.
+Provider writes are additive, and every retry re-reads current provider content
+before calculating missing songs. This makes a repair run safe for an account
+that already contains playlists or tracks from incomplete prior runs.
 
 OAuth completion verifies the provider's current-user endpoint before replacing
-a stored connection. The verified provider ID and display name/username are
-stored together and shown by both clients. A failed identity lookup leaves the
-previous connection unchanged, preventing a new token from being displayed
-with a stale account ID.
-
-The API updates a progress heartbeat whenever it persists import progress. A
-run that stops reporting for five minutes is marked failed with a restartable
-error. New imports are blocked while a failed or partial import is available,
-so a user must safely restart it before beginning another transfer.
+a stored connection. Provider tokens remain encrypted at rest and are never
+returned to clients.
 
 ## Required configuration
 
-The deployment workflow configures public runtime values. The API service also
-needs these Secret Manager secrets:
+Secret Manager secrets:
 
 - `SPOTIFY_CLIENT_SECRET`
 - `MUSIC_TOKEN_ENCRYPTION_KEY` — 32 random bytes, base64url encoded
+- `MUSIC_IMPORT_TASK_SECRET` — random worker-authentication value
 
 Repository variables:
 
 - `SPOTIFY_CLIENT_ID`
 - `TIDAL_CLIENT_ID`
 
-The exact callbacks are:
+Cloud Run runtime values:
+
+- `GOOGLE_CLOUD_PROJECT`
+- `GOOGLE_CLOUD_REGION`
+- `MUSIC_IMPORT_TASK_QUEUE`
+- `MUSIC_IMPORT_TASK_BASE_URL`
+- `MUSIC_IMPORT_TASK_SERVICE_ACCOUNT`
+
+Provider callbacks:
 
 - `https://api.hamrah.app/v1/music/connections/spotify/callback`
 - `https://api.hamrah.app/v1/music/connections/tidal/callback`
 
-TIDAL connections request `playlists.write`, `collection.write`, `search.read`,
-and `user.read`. Existing TIDAL connections must be reconnected after a scope
-change.
+Spotify needs playlist read/write, followed-artist read, and library read/write
+scopes. TIDAL needs playlist, collection, search, and user read/write scopes.
+Reconnect an existing provider account after a required scope changes.
 
-Spotify connections request `user-library-read` in addition to playlist and
-artist-read permissions. Existing Spotify connections must be reconnected once
-before an import can include Liked Songs.
+## Current-account repair check
 
-## Manual integration check
+Use an allowlisted Spotify account and the intended TIDAL account.
 
-Use an allowlisted Spotify development-mode account and a TIDAL test account.
-
-1. In Hamrah Settings, connect (or reconnect) Spotify and TIDAL.
-2. Create one public and one non-public Spotify playlist, each containing a
-   track available in TIDAL; like one additional Spotify track; and add a
-   followed artist with an unambiguous TIDAL name.
-3. Start an import with the Liked Songs option selected but without saved
-   playlists, then verify two TIDAL playlists with the correct public/unlisted
-   visibility, the exact track matches in each playlist, the Liked Song saved
-   to the TIDAL collection, and the matched TIDAL artist follow.
-4. Save another Spotify playlist, repeat with the saved-playlists option, and
-   verify that its playlist and exact tracks are created.
-5. Verify a track with no TIDAL ISRC match is not copied and increases the
-   import's `unmatched_items` count.
+1. Connect or reconnect both accounts and confirm their displayed account names.
+2. In TIDAL, leave all same-name playlists and their distinct songs in place.
+3. In Spotify, leave the matching playlists and any Spotify-only songs in place.
+4. Start a sync with owned playlists selected.
+5. Verify each name has one TIDAL playlist containing the union of all former
+   TIDAL copies plus exact Spotify-only matches.
+6. Verify the matching Spotify playlist contains exact TIDAL-only matches.
+7. Verify TIDAL-only playlist names now have a Spotify counterpart.
+8. Review unmatched songs; their original provider content must still exist.
+9. Run sync again and verify it adds no new playlist copies.
 
 ## Deliberately not implemented
 
-This is an import, not a recurring sync. It does not delete destination data,
-export TIDAL data, make heuristic track or artist matches, or run a background
-job. If imports outgrow the request timeout, add a durable job runner that
-preserves the same per-collection progress before increasing scope.
+This is a user-triggered reconciliation, not a continuously scheduled sync. It
+does not propagate deletions, use heuristic song matching, copy artwork or
+descriptions, or infer that same-name TIDAL playlists were created by another
+application.

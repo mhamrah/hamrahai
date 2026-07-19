@@ -15,6 +15,7 @@ use base64::{
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
 use crate::{auth::require_session_or_claims, db::DbPool};
@@ -105,6 +106,8 @@ struct CloudTaskRequest {
 struct CloudTask {
     http_request: CloudTaskHttpRequest,
     dispatch_deadline: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_time: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -154,6 +157,10 @@ fn default_true() -> bool {
 }
 
 const IMPORT_PROGRESS_STALE_AFTER_SECONDS: i64 = 300;
+const IMPORT_WORKER_HEARTBEAT_SECONDS: u64 = 60;
+const IMPORT_WORKER_LEASE_SECONDS: i64 = 180;
+const IMPORT_WORKER_BUDGET_SECONDS: u64 = 1_680;
+const IMPORT_WORKER_RETRY_SECONDS: u64 = 30;
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct MusicImportResponse {
@@ -741,7 +748,7 @@ fn is_retryable_import_status(status: &str) -> bool {
 }
 
 async fn fail_stale_imports(pool: &DbPool, user_id: Uuid) -> Result<u64, sqlx::Error> {
-    Ok(sqlx::query("UPDATE music_import_runs SET status = 'failed', stage = 'failed', error = 'music import stopped reporting progress; restart it to continue safely', completed_at = NOW(), progress_updated_at = NOW() WHERE user_id = $1 AND status IN ('queued', 'running') AND progress_updated_at < NOW() - ($2 * INTERVAL '1 second')")
+    Ok(sqlx::query("UPDATE music_import_runs SET status = 'failed', stage = 'failed', error = 'music import stopped reporting progress; restart it to continue safely', completed_at = NOW(), progress_updated_at = NOW(), worker_task_name = NULL, next_attempt_at = NULL WHERE user_id = $1 AND ((status = 'running' AND progress_updated_at < NOW() - ($2 * INTERVAL '1 second')) OR (status = 'queued' AND COALESCE(next_attempt_at, progress_updated_at) < NOW() - ($2 * INTERVAL '1 second')))")
         .bind(user_id)
         .bind(IMPORT_PROGRESS_STALE_AFTER_SECONDS)
         .execute(pool)
@@ -794,22 +801,27 @@ fn public_import_failure_message(failure: &import::ImportFailure, import_id: Uui
     format!("{detail} Reference: {reference}.")
 }
 
+enum RunImportDisposition {
+    Finished(Response),
+    RetryAfter(StdDuration),
+}
+
 async fn run_import(
     pool: &DbPool,
     user_id: Uuid,
     import_id: Uuid,
     options: import::ImportOptions,
-) -> Response {
+) -> RunImportDisposition {
     let initial_progress = import::ImportProgress::default();
     persist_import_progress(pool, import_id, &initial_progress).await;
-    let existing_tidal_playlists = match load_import_playlists(pool, import_id).await {
+    let playlist_mappings = match load_playlist_mappings(pool, user_id, import_id).await {
         Ok(value) => value,
         Err(err) => {
             tracing::error!(%err, %import_id, "load created TIDAL playlists for restart");
-            return error(
+            return RunImportDisposition::Finished(error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "could not resume music import safely",
-            );
+            ));
         }
     };
     let result = async {
@@ -853,7 +865,7 @@ async fn run_import(
             &provider,
             import_id,
             options,
-            &existing_tidal_playlists,
+            &playlist_mappings,
             |progress| {
                 let pool = pool.clone();
                 async move { persist_import_progress(&pool, import_id, &progress).await }
@@ -891,6 +903,24 @@ async fn run_import(
         .await
     }
     .await;
+
+    if let Err(failure) = &result
+        && let Some(delay) = import::deferred_rate_limit_delay(&failure.message)
+    {
+        let mut progress = failure.progress.clone();
+        progress.activity = format!(
+            "Provider rate limit reached; resuming automatically in {} minutes",
+            delay.as_secs().div_ceil(60)
+        );
+        persist_import_progress(pool, import_id, &progress).await;
+        tracing::warn!(
+            %import_id,
+            retry_after_seconds = delay.as_secs(),
+            stage = progress.stage,
+            "music import deferred for provider rate limit"
+        );
+        return RunImportDisposition::RetryAfter(delay);
+    }
 
     let (status, outcome, mut progress, import_error) = match result {
         Ok((outcome, progress)) if outcome.unmatched_items == 0 => {
@@ -944,12 +974,12 @@ async fn run_import(
         tracing::error!(%err, %import_id, "persist unmatched music tracks");
     }
     persist_import_progress(pool, import_id, &progress).await;
-    match sqlx::query_as::<_, MusicImportResponse>("UPDATE music_import_runs SET status = $1, stage = $2, total_items = $3, imported_items = $4, unmatched_items = $5, playlist_total = $6, playlists_imported = $7, artist_total = $8, artists_checked = $9, artists_matched = $10, artists_followed = $11, playlist_track_total = $12, playlist_tracks_imported = $13, saved_track_total = $14, saved_tracks_imported = $15, tracks_matched = $16, activity = $17, error = $18, completed_at = NOW(), progress_updated_at = NOW() WHERE id = $19 AND status = 'running' RETURNING id,status,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,stage,total_items,imported_items,unmatched_items,playlist_total,playlists_imported,artist_total,artists_checked,artists_matched,artists_followed,playlist_track_total,playlist_tracks_imported,saved_track_total,saved_tracks_imported,tracks_matched,activity,error,created_at")
+    RunImportDisposition::Finished(match sqlx::query_as::<_, MusicImportResponse>("UPDATE music_import_runs SET status = $1, stage = $2, total_items = $3, imported_items = $4, unmatched_items = $5, playlist_total = $6, playlists_imported = $7, artist_total = $8, artists_checked = $9, artists_matched = $10, artists_followed = $11, playlist_track_total = $12, playlist_tracks_imported = $13, saved_track_total = $14, saved_tracks_imported = $15, tracks_matched = $16, activity = $17, error = $18, completed_at = NOW(), progress_updated_at = NOW(), worker_task_name = NULL, next_attempt_at = NULL WHERE id = $19 AND status = 'running' RETURNING id,status,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,stage,total_items,imported_items,unmatched_items,playlist_total,playlists_imported,artist_total,artists_checked,artists_matched,artists_followed,playlist_track_total,playlist_tracks_imported,saved_track_total,saved_tracks_imported,tracks_matched,activity,error,created_at")
         .bind(status).bind(progress.stage).bind(outcome.total_items).bind(outcome.imported_items).bind(outcome.unmatched_items).bind(progress.playlist_total).bind(progress.playlists_imported).bind(progress.artist_total).bind(progress.artists_checked).bind(progress.artists_matched).bind(progress.artists_followed).bind(progress.playlist_track_total).bind(progress.playlist_tracks_imported).bind(progress.saved_track_total).bind(progress.saved_tracks_imported).bind(progress.tracks_matched).bind(&progress.activity).bind(import_error).bind(import_id).fetch_optional(pool).await {
         Ok(Some(row)) => (StatusCode::CREATED, Json(row)).into_response(),
         Ok(None) => error(StatusCode::CONFLICT, "music import is no longer active; refresh its status before restarting"),
         Err(err) => { tracing::error!(%err, %import_id, "complete music import"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not complete music import") }
-    }
+    })
 }
 
 async fn import_response(
@@ -969,7 +999,12 @@ fn launch_import_locally(
     options: import::ImportOptions,
 ) {
     tokio::spawn(async move {
-        let _ = run_import(&pool, user_id, import_id, options).await;
+        loop {
+            match run_import(&pool, user_id, import_id, options).await {
+                RunImportDisposition::Finished(_) => break,
+                RunImportDisposition::RetryAfter(delay) => tokio::time::sleep(delay).await,
+            }
+        }
     });
 }
 
@@ -993,7 +1028,10 @@ async fn cloud_tasks_access_token() -> Result<String, String> {
         .map_err(|error| format!("could not read Cloud Tasks credentials: {error}"))
 }
 
-async fn enqueue_import_task(import_id: Uuid) -> Result<(), String> {
+async fn enqueue_import_task(
+    import_id: Uuid,
+    schedule_time: Option<chrono::DateTime<Utc>>,
+) -> Result<(), String> {
     let project = env("GOOGLE_CLOUD_PROJECT")?;
     let region = env("GOOGLE_CLOUD_REGION")?;
     let queue = env("MUSIC_IMPORT_TASK_QUEUE")?;
@@ -1023,6 +1061,7 @@ async fn enqueue_import_task(import_id: Uuid) -> Result<(), String> {
                 },
             },
             dispatch_deadline: "1800s".to_string(),
+            schedule_time: schedule_time.map(|value| value.to_rfc3339()),
         },
     };
     let response = reqwest::Client::new()
@@ -1059,16 +1098,31 @@ async fn queue_or_run_import(
         launch_import_locally(pool.clone(), user_id, import_id, options);
         return Ok(());
     }
-    enqueue_import_task(import_id).await
+    enqueue_import_task(import_id, None).await
 }
 
-async fn load_import_playlists(
+async fn load_playlist_mappings(
     pool: &DbPool,
+    user_id: Uuid,
     import_id: Uuid,
-) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
+) -> Result<import::PlaylistMappings, sqlx::Error> {
+    let mut tidal_by_spotify = sqlx::query_as::<_, (String, String)>("SELECT spotify_playlist_id, tidal_playlist_id FROM music_playlist_sync_hashes WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
     let rows = sqlx::query_as::<_, (String, String)>("SELECT spotify_playlist_id, tidal_playlist_id FROM music_import_playlists WHERE import_id = $1")
         .bind(import_id).fetch_all(pool).await?;
-    Ok(rows.into_iter().collect())
+    let current_import_spotify = rows
+        .iter()
+        .map(|(spotify_playlist_id, _)| spotify_playlist_id.clone())
+        .collect();
+    tidal_by_spotify.extend(rows);
+    Ok(import::PlaylistMappings {
+        tidal_by_spotify,
+        current_import_spotify,
+    })
 }
 
 async fn persist_import_playlist(
@@ -1077,7 +1131,7 @@ async fn persist_import_playlist(
     spotify_playlist_id: &str,
     tidal_playlist_id: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO music_import_playlists (import_id,spotify_playlist_id,tidal_playlist_id) VALUES ($1,$2,$3) ON CONFLICT (import_id,spotify_playlist_id) DO NOTHING")
+    sqlx::query("INSERT INTO music_import_playlists (import_id,spotify_playlist_id,tidal_playlist_id) VALUES ($1,$2,$3) ON CONFLICT (import_id,spotify_playlist_id) DO UPDATE SET tidal_playlist_id = EXCLUDED.tidal_playlist_id")
         .bind(import_id).bind(spotify_playlist_id).bind(tidal_playlist_id).execute(pool).await?;
     Ok(())
 }
@@ -1248,7 +1302,7 @@ pub async fn restart_import(
         }
     }
     let requested_options = request.map(|Json(value)| value);
-    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET include_owned_playlists = COALESCE($3, include_owned_playlists), include_saved_playlists = COALESCE($4, include_saved_playlists), include_followed_artists = COALESCE($5, include_followed_artists), include_saved_tracks = COALESCE($6, include_saved_tracks), status = 'queued', stage = 'queued', activity = 'Queued for secure background import', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
+    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET include_owned_playlists = COALESCE($3, include_owned_playlists), include_saved_playlists = COALESCE($4, include_saved_playlists), include_followed_artists = COALESCE($5, include_followed_artists), include_saved_tracks = COALESCE($6, include_saved_tracks), status = 'queued', stage = 'queued', activity = 'Queued for secure background import', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW(), worker_task_name = NULL, next_attempt_at = NULL WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
         .bind(import_id)
         .bind(claims.sub)
         .bind(requested_options.as_ref().map(|value| value.include_owned_playlists))
@@ -1301,6 +1355,44 @@ pub async fn restart_import(
     }
 }
 
+async fn schedule_import_retry(
+    pool: &DbPool,
+    import_id: Uuid,
+    delay: StdDuration,
+    activity: &str,
+) -> Result<(), String> {
+    let delay = delay.min(StdDuration::from_secs(24 * 60 * 60));
+    let next_attempt_at = Utc::now()
+        + Duration::from_std(delay)
+            .map_err(|error| format!("invalid music import retry delay: {error}"))?;
+    let updated = sqlx::query("UPDATE music_import_runs SET status = 'queued', stage = 'queued', activity = $1, next_attempt_at = $2, worker_task_name = NULL, progress_updated_at = NOW() WHERE id = $3 AND status = 'running'")
+        .bind(activity)
+        .bind(next_attempt_at)
+        .bind(import_id)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .rows_affected();
+    if updated == 0 {
+        return Ok(());
+    }
+    if let Err(error) = enqueue_import_task(import_id, Some(next_attempt_at)).await {
+        let _ = sqlx::query("UPDATE music_import_runs SET next_attempt_at = NULL WHERE id = $1 AND status = 'queued'")
+            .bind(import_id)
+            .execute(pool)
+            .await;
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn ensure_future_import_task(
+    import_id: Uuid,
+    next_attempt_at: chrono::DateTime<Utc>,
+) -> Result<(), String> {
+    enqueue_import_task(import_id, Some(next_attempt_at)).await
+}
+
 pub async fn execute_import_task(
     State(pool): State<DbPool>,
     headers: HeaderMap,
@@ -1327,8 +1419,15 @@ pub async fn execute_import_task(
         );
         return StatusCode::FORBIDDEN.into_response();
     }
-    let claimed = match sqlx::query_as::<_, (Uuid, bool, bool, bool, bool)>("UPDATE music_import_runs SET status = 'running', stage = 'preparing', activity = 'Background worker started', worker_started_at = NOW(), task_attempts = task_attempts + 1, progress_updated_at = NOW() WHERE id = $1 AND status = 'queued' RETURNING user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
+    let task_name = headers
+        .get("x-cloudtasks-taskname")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("manual-{import_id}"));
+    let claimed = match sqlx::query_as::<_, (Uuid, bool, bool, bool, bool)>("UPDATE music_import_runs SET status = 'running', stage = 'preparing', activity = 'Background worker started', worker_started_at = NOW(), task_attempts = task_attempts + 1, progress_updated_at = NOW(), worker_task_name = $2, next_attempt_at = NULL WHERE id = $1 AND ((status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())) OR (status = 'running' AND worker_task_name = $2 AND progress_updated_at < NOW() - ($3 * INTERVAL '1 second'))) RETURNING user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
         .bind(import_id)
+        .bind(&task_name)
+        .bind(IMPORT_WORKER_LEASE_SECONDS)
         .fetch_optional(&pool)
         .await
     {
@@ -1343,25 +1442,94 @@ pub async fn execute_import_task(
         include_saved_tracks,
     )) = claimed
     else {
+        match sqlx::query_as::<_, (String, Option<chrono::DateTime<Utc>>, Option<String>)>(
+            "SELECT status,next_attempt_at,worker_task_name FROM music_import_runs WHERE id = $1",
+        )
+        .bind(import_id)
+        .fetch_optional(&pool)
+        .await
+        {
+            Ok(Some((status, Some(next_attempt_at), _)))
+                if status == "queued" && next_attempt_at > Utc::now() =>
+            {
+                if let Err(error) = ensure_future_import_task(import_id, next_attempt_at).await {
+                    tracing::error!(%error, %import_id, "restore scheduled music import task");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+            Ok(Some((status, _, Some(worker_task_name))))
+                if status == "running" && worker_task_name == task_name =>
+            {
+                return StatusCode::CONFLICT.into_response();
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(%error, %import_id, "inspect unclaimed music import task");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
         return StatusCode::NO_CONTENT.into_response();
     };
-    let response = run_import(
-        &pool,
-        user_id,
-        import_id,
-        import::ImportOptions {
-            include_owned_playlists,
-            include_saved_playlists,
-            include_followed_artists,
-            include_saved_tracks,
-        },
+    let heartbeat_pool = pool.clone();
+    let heartbeat_task_name = task_name.clone();
+    let heartbeat = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(StdDuration::from_secs(IMPORT_WORKER_HEARTBEAT_SECONDS)).await;
+            if let Err(error) = sqlx::query("UPDATE music_import_runs SET progress_updated_at = NOW() WHERE id = $1 AND status = 'running' AND worker_task_name = $2")
+                .bind(import_id)
+                .bind(&heartbeat_task_name)
+                .execute(&heartbeat_pool)
+                .await
+            {
+                tracing::warn!(%error, %import_id, "heartbeat music import worker");
+            }
+        }
+    });
+    let result = tokio::time::timeout(
+        StdDuration::from_secs(IMPORT_WORKER_BUDGET_SECONDS),
+        run_import(
+            &pool,
+            user_id,
+            import_id,
+            import::ImportOptions {
+                include_owned_playlists,
+                include_saved_playlists,
+                include_followed_artists,
+                include_saved_tracks,
+            },
+        ),
     )
     .await;
-    if response.status().is_server_error() {
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-    } else {
-        StatusCode::NO_CONTENT.into_response()
+    heartbeat.abort();
+    let _ = heartbeat.await;
+
+    let retry = match result {
+        Ok(RunImportDisposition::RetryAfter(delay)) => Some((
+            delay,
+            "Waiting for provider rate limit; the import will resume automatically",
+        )),
+        Ok(RunImportDisposition::Finished(response)) if response.status().is_server_error() => {
+            Some((
+                StdDuration::from_secs(IMPORT_WORKER_RETRY_SECONDS),
+                "Retrying after a temporary worker error",
+            ))
+        }
+        Ok(RunImportDisposition::Finished(_)) => None,
+        Err(_) => {
+            tracing::warn!(%import_id, "music import worker reached its execution budget");
+            Some((
+                StdDuration::from_secs(IMPORT_WORKER_RETRY_SECONDS),
+                "Continuing the import in a new background task",
+            ))
+        }
+    };
+    if let Some((delay, activity)) = retry
+        && let Err(error) = schedule_import_retry(&pool, import_id, delay, activity).await
+    {
+        tracing::error!(%error, %import_id, "schedule music import retry");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 pub async fn list_imports(State(pool): State<DbPool>, headers: HeaderMap) -> Response {
@@ -1489,6 +1657,35 @@ mod tests {
         assert!(request.include_owned_playlists);
         assert!(request.include_followed_artists);
         assert!(!request.include_saved_tracks);
+    }
+    #[test]
+    fn cloud_task_uses_google_schedule_and_deadline_wire_names() {
+        let task = CloudTaskRequest {
+            task: CloudTask {
+                http_request: CloudTaskHttpRequest {
+                    http_method: "POST".to_string(),
+                    url: "https://api.example/internal/import".to_string(),
+                    headers: std::collections::HashMap::new(),
+                    body: String::new(),
+                    oidc_token: CloudTaskOidcToken {
+                        service_account_email: "worker@example.iam.gserviceaccount.com".to_string(),
+                        audience: "https://api.example".to_string(),
+                    },
+                },
+                dispatch_deadline: "1800s".to_string(),
+                schedule_time: Some("2026-07-19T17:00:00Z".to_string()),
+            },
+        };
+
+        let value = serde_json::to_value(task).unwrap();
+
+        assert_eq!(value["task"]["dispatchDeadline"], "1800s");
+        assert_eq!(value["task"]["scheduleTime"], "2026-07-19T17:00:00Z");
+        assert_eq!(value["task"]["httpRequest"]["httpMethod"], "POST");
+        assert_eq!(
+            value["task"]["httpRequest"]["oidcToken"]["serviceAccountEmail"],
+            "worker@example.iam.gserviceaccount.com"
+        );
     }
     #[test]
     fn tidal_authorization_only_requests_third_party_scopes() {

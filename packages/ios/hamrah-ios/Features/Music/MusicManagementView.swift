@@ -38,7 +38,7 @@ struct MusicManagementView: View {
                 }
             }
             Section("Music sync") {
-                Text("Syncs owned playlists in both directions using exact ISRC matches. Duplicate TIDAL playlists with the same Spotify playlist name are consolidated into one copy. Liked Songs added in TIDAL are saved to Spotify; removing music in TIDAL never removes it from Spotify.")
+                Text("Syncs owned playlists in both directions using exact ISRC matches. Same-name TIDAL playlists are merged into one complete copy before the extras are removed. Provider rate limits pause and resume automatically; removing music from either provider never removes it from the other.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Include saved Spotify playlists", isOn: $includeSavedPlaylists).disabled(latest?.isActive == true)
                 Toggle("Sync Liked Songs", isOn: $includeSavedTracks).disabled(latest?.isActive == true)
@@ -69,6 +69,7 @@ struct MusicManagementView: View {
                 Text(run.createdAtDescription).font(.caption2).foregroundStyle(.secondary)
             }
             Text(run.resultSummary).font(.footnote).foregroundStyle(.secondary)
+            Text("Current activity: \(run.activity)").font(.caption).foregroundStyle(.secondary)
             if run.unmatched_items > 0 {
                 Button(showingUnmatchedFor == run.id ? "Hide unsupported songs" : "Review \(run.unmatched_items) unsupported songs") { Task { await loadUnmatched(run.id) } }
                 if showingUnmatchedFor == run.id {
