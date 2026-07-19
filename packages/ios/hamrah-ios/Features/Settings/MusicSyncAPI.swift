@@ -170,25 +170,21 @@ struct MusicSyncAPI {
             responseType: EmptyResponse.self)
     }
 
-    func startImport(
-        includeSavedPlaylists: Bool,
-        includeSavedTracks: Bool
-    ) async throws -> MusicImportDTO {
+    func startImport(includeSavedPlaylists: Bool) async throws -> MusicImportDTO {
         try await client.post(
             "/v1/music/imports",
             body: MusicImportRequestDTO(
                 include_owned_playlists: true,
                 include_saved_playlists: includeSavedPlaylists,
                 include_followed_artists: true,
-                include_saved_tracks: includeSavedTracks),
+                include_saved_tracks: true),
             auth: .required,
             responseType: MusicImportDTO.self)
     }
 
     func restartImport(
         id: String,
-        includeSavedPlaylists: Bool,
-        includeSavedTracks: Bool
+        includeSavedPlaylists: Bool
     ) async throws -> MusicImportDTO {
         try await client.post(
             "/v1/music/imports/\(id)/restart",
@@ -196,7 +192,7 @@ struct MusicSyncAPI {
                 include_owned_playlists: true,
                 include_saved_playlists: includeSavedPlaylists,
                 include_followed_artists: true,
-                include_saved_tracks: includeSavedTracks),
+                include_saved_tracks: true),
             auth: .required,
             responseType: MusicImportDTO.self)
     }

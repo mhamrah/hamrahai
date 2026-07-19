@@ -13,6 +13,20 @@ struct RootView: View {
     @StateObject private var biometricManager = BiometricAuthManager()
 
     var body: some View {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing-authenticated") {
+                AuthenticatedMainView()
+                    .environmentObject(nativeAuthManager)
+                    .environmentObject(biometricManager)
+            } else {
+                authenticatedRoot
+            }
+        #else
+            authenticatedRoot
+        #endif
+    }
+
+    private var authenticatedRoot: some View {
         ProgressiveAuthView()
             .environmentObject(nativeAuthManager)
             .environmentObject(biometricManager)

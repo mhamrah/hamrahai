@@ -103,8 +103,10 @@ struct MusicImportDTOTests {
 
         let data = try JSONEncoder().encode(options)
         let decoded = try JSONDecoder().decode(MusicImportRequestDTO.self, from: data)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Bool])
 
         #expect(decoded == options)
+        #expect(json["include_saved_tracks"] == true)
     }
 
     @Test

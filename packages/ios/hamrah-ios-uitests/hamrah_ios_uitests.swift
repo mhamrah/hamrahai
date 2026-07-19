@@ -32,6 +32,20 @@ final class hamrah_ios_uitests: XCTestCase {
     }
 
     @MainActor
+    func testMusicTabOpensMusicManagementWithoutALikedSongsCheckbox() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("--ui-testing-authenticated")
+        app.launch()
+
+        let musicTab = app.tabBars.buttons["Music"]
+        XCTAssertTrue(musicTab.waitForExistence(timeout: 5))
+        musicTab.tap()
+
+        XCTAssertTrue(app.navigationBars["Music"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.switches["Sync Liked Songs"].exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

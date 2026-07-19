@@ -32,9 +32,8 @@ TIDAL.
 - Duplicate TIDAL content is copied directly by TIDAL track ID before a
   playlist is deleted. If TIDAL skips any of those writes, the run fails safely
   and keeps the duplicate playlists.
-- Spotify Liked Songs reconciliation is optional and additive in both
-  directions. Followed artists continue to flow from Spotify to an exact-name
-  TIDAL match.
+- Spotify Liked Songs are always reconciled additively in both directions.
+  Followed artists continue to flow from Spotify to an exact-name TIDAL match.
 - Artwork and playlist descriptions are not transferred.
 - A newly created TIDAL playlist is public when its Spotify source is public
   and unlisted otherwise.
@@ -73,7 +72,7 @@ Each run:
 6. Persists the Spotify/TIDAL mapping and reconciled content hash.
 7. Deletes extra same-name TIDAL playlists only after their content is safe in
    the canonical playlist.
-8. Reconciles optional Liked Songs and followed artists.
+8. Reconciles Liked Songs and followed artists.
 9. Persists a completed, partial, or failed result plus unmatched-song details.
 
 An inaccessible Spotify playlist is skipped and recorded as unmatched without
@@ -106,6 +105,8 @@ A `Retry-After` longer than 15 seconds is converted into a scheduled Cloud Task
 instead of sleeping inside Cloud Run. Spotify ISRC search results are cached
 after each lookup so a later rate limit does not discard completed catalog
 work. TIDAL write retries retain stable import-specific idempotency keys.
+Artist-follow payloads are sorted, and their keys include a payload fingerprint,
+so a restart cannot reuse a key with differently ordered artist IDs.
 
 ## Restart and data safety
 

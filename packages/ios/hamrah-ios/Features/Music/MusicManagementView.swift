@@ -8,7 +8,6 @@ struct MusicManagementView: View {
     @State private var unmatched: [MusicUnmatchedTrackDTO] = []
     @State private var showingUnmatchedFor: String?
     @State private var includeSavedPlaylists = false
-    @State private var includeSavedTracks = false
     @State private var isLoading = false
     @State private var error: String?
 
@@ -38,10 +37,9 @@ struct MusicManagementView: View {
                 }
             }
             Section("Music sync") {
-                Text("Syncs owned playlists in both directions using exact ISRC matches. Same-name TIDAL playlists are merged into one complete copy before the extras are removed. Provider rate limits pause and resume automatically; removing music from either provider never removes it from the other.")
+                Text("Syncs owned playlists and Liked Songs in both directions using exact ISRC matches. Same-name TIDAL playlists are merged into one complete copy before the extras are removed. Provider rate limits pause and resume automatically; removing music from either provider never removes it from the other.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Include saved Spotify playlists", isOn: $includeSavedPlaylists).disabled(latest?.isActive == true)
-                Toggle("Sync Liked Songs", isOn: $includeSavedTracks).disabled(latest?.isActive == true)
                 Button(actionTitle) { Task { await startOrRestart() } }
                     .disabled(isLoading || latest?.isActive == true || !ready)
             }
@@ -87,9 +85,9 @@ struct MusicManagementView: View {
     }
 
     private var actionTitle: String { isLoading ? "Working…" : latest?.canRestart == true ? "Retry partial import" : "Sync now" }
-    private func refresh(silent: Bool = false) async { do { async let c = api.connections(); async let i = api.imports(); connections = try await c; imports = try await i; if let latest { includeSavedPlaylists = latest.include_saved_playlists; includeSavedTracks = latest.include_saved_tracks } } catch let failure where !silent { error = failure.localizedDescription } catch {} }
+    private func refresh(silent: Bool = false) async { do { async let c = api.connections(); async let i = api.imports(); connections = try await c; imports = try await i; if let latest { includeSavedPlaylists = latest.include_saved_playlists } } catch let failure where !silent { error = failure.localizedDescription } catch {} }
     private func connect(_ provider: String) async { do { openURL(try await api.beginConnection(provider: provider)) } catch { self.error = error.localizedDescription } }
     private func disconnect(_ provider: String) async { do { try await api.disconnectConnection(provider: provider); await refresh() } catch { self.error = error.localizedDescription } }
-    private func startOrRestart() async { isLoading = true; defer { isLoading = false }; do { let run = if let latest, latest.canRestart { try await api.restartImport(id: latest.id, includeSavedPlaylists: includeSavedPlaylists, includeSavedTracks: includeSavedTracks) } else { try await api.startImport(includeSavedPlaylists: includeSavedPlaylists, includeSavedTracks: includeSavedTracks) }; imports = [run] + imports.filter { $0.id != run.id } } catch { self.error = error.localizedDescription; await refresh(silent: true) } }
+    private func startOrRestart() async { isLoading = true; defer { isLoading = false }; do { let run = if let latest, latest.canRestart { try await api.restartImport(id: latest.id, includeSavedPlaylists: includeSavedPlaylists) } else { try await api.startImport(includeSavedPlaylists: includeSavedPlaylists) }; imports = [run] + imports.filter { $0.id != run.id } } catch { self.error = error.localizedDescription; await refresh(silent: true) } }
     private func loadUnmatched(_ id: String) async { if showingUnmatchedFor == id { showingUnmatchedFor = nil; return }; do { unmatched = try await api.unmatchedTracks(importID: id); showingUnmatchedFor = id } catch { self.error = error.localizedDescription } }
 }

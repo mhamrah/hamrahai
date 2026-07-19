@@ -334,7 +334,7 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
                 "include_owned_playlists": true,
                 "include_saved_playlists": true,
                 "include_followed_artists": true,
-                "include_saved_tracks": true,
+                "include_saved_tracks": false,
             })
             .to_string(),
         ))
@@ -393,6 +393,7 @@ async fn http_music_import_create_records_the_required_provider_pair() -> anyhow
                 "include_owned_playlists": true,
                 "include_saved_playlists": false,
                 "include_followed_artists": true,
+                "include_saved_tracks": false,
             })
             .to_string(),
         ))
@@ -400,14 +401,15 @@ async fn http_music_import_create_records_the_required_provider_pair() -> anyhow
 
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    let (source_provider, target_provider): (String, String) = sqlx::query_as(
-        "SELECT source_provider, target_provider FROM music_import_runs WHERE user_id = $1",
+    let (source_provider, target_provider, include_saved_tracks): (String, String, bool) = sqlx::query_as(
+        "SELECT source_provider, target_provider, include_saved_tracks FROM music_import_runs WHERE user_id = $1",
     )
     .bind(user.id)
     .fetch_one(&pool)
     .await?;
     assert_eq!(source_provider, "spotify");
     assert_eq!(target_provider, "tidal");
+    assert!(include_saved_tracks);
 
     Ok(())
 }
