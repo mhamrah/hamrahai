@@ -25,6 +25,7 @@ const MAX_INLINE_RATE_LIMIT_DELAY: Duration = Duration::from_secs(15);
 const DEFERRED_RATE_LIMIT_PREFIX: &str = "hamrah_provider_rate_limit:";
 const TIDAL_ISRC_FILTER_LIMIT: usize = 20;
 const TIDAL_DUPLICATE_COLLECTION_ITEMS: &str = "DUPLICATE_ITEMS_IN_COLLECTION";
+const TIDAL_ALREADY_PRESENT: &str = "ALREADY_PRESENT";
 const INACCESSIBLE_SPOTIFY_PLAYLIST_WARNING: &str = "Some Spotify playlists could not be read. Check that you own or collaborate on them, then restart to retry safely.";
 
 static TIDAL_NEXT_REQUEST_AT: OnceLock<Mutex<Instant>> = OnceLock::new();
@@ -625,10 +626,16 @@ impl HttpMusicImportProvider {
             .json()
             .await
             .map_err(|error| error.to_string())?;
-        let skipped = response.meta.skipped.len() as i32;
+        let skipped = response.meta.skipped.len();
+        let unmatched = response
+            .meta
+            .skipped
+            .iter()
+            .filter(|item| item.reason != TIDAL_ALREADY_PRESENT)
+            .count();
         Ok(TrackWriteOutcome {
-            imported_items: track_ids.len() as i32 - skipped,
-            unmatched_items: skipped,
+            imported_items: track_ids.len().saturating_sub(skipped) as i32,
+            unmatched_items: unmatched as i32,
         })
     }
 
@@ -2277,7 +2284,12 @@ struct TidalTrackWriteResponse {
 #[derive(Deserialize, Default)]
 struct TidalTrackWriteMeta {
     #[serde(default)]
-    skipped: Vec<serde_json::Value>,
+    skipped: Vec<TidalSkippedTrack>,
+}
+
+#[derive(Deserialize)]
+struct TidalSkippedTrack {
+    reason: String,
 }
 
 #[cfg(test)]
@@ -3673,6 +3685,91 @@ mod tests {
                     { "type": "tracks", "id": "tidal-track-b" },
                 ],
             })]
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_tidal_tracks_are_reconciled_without_being_counted_as_unmatched() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().route(
+            "/userCollectionTracks/me/relationships/items",
+            post({
+                let requests = Arc::clone(&requests);
+                move |headers: HeaderMap, body: String| {
+                    let requests = Arc::clone(&requests);
+                    async move {
+                        requests.lock().unwrap().push((
+                            headers
+                                .get(header::CONTENT_TYPE)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                            headers
+                                .get("idempotency-key")
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                        ));
+                        (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                            r#"{
+                                "data": [],
+                                "links": {},
+                                "meta": {
+                                    "skipped": [
+                                        {"id":"already-present","type":"tracks","reason":"ALREADY_PRESENT"},
+                                        {"id":"not-found","type":"tracks","reason":"NOT_FOUND"}
+                                    ]
+                                }
+                            }"#,
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+
+        let result = provider
+            .save_tidal_tracks(
+                &[
+                    "already-present".to_string(),
+                    "not-found".to_string(),
+                    "new-favorite".to_string(),
+                ],
+                "stable-idempotency-key".to_string(),
+            )
+            .await
+            .unwrap();
+
+        server.abort();
+        assert_eq!(
+            result,
+            TrackWriteOutcome {
+                imported_items: 1,
+                unmatched_items: 1,
+            }
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![(
+                TIDAL_MEDIA_TYPE.to_string(),
+                "stable-idempotency-key".to_string(),
+                serde_json::json!({
+                    "data": [
+                        {"type":"tracks","id":"already-present"},
+                        {"type":"tracks","id":"not-found"},
+                        {"type":"tracks","id":"new-favorite"},
+                    ]
+                }),
+            )]
         );
     }
 
