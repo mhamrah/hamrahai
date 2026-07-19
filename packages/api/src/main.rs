@@ -18,12 +18,25 @@ async fn main() -> anyhow::Result<()> {
     // Logging - Cloud Run reads from stdout/stderr
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // Use compact format that works well with Cloud Logging
-    fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .compact()
-        .init();
+    // Cloud Run automatically provides K_SERVICE. Emit structured JSON there so
+    // Cloud Logging can parse fields without ANSI escape sequences; keep the
+    // compact developer-friendly output for local runs.
+    if std::env::var_os("K_SERVICE").is_some() {
+        fmt()
+            .json()
+            .with_ansi(false)
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_env_filter(filter)
+            .with_target(false)
+            .init();
+    } else {
+        fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .compact()
+            .init();
+    }
 
     info!("=================================================");
     info!("🚀 hamrah-api starting up");

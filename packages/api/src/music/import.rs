@@ -17,6 +17,7 @@ const TIDAL_API_BASE: &str = "https://openapi.tidal.com/v2";
 const TIDAL_MEDIA_TYPE: &str = "application/vnd.api+json";
 const TIDAL_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const TIDAL_RATE_LIMIT_RETRIES: u8 = 3;
+const SPOTIFY_RATE_LIMIT_RETRIES: u8 = 3;
 const TIDAL_ISRC_FILTER_LIMIT: usize = 20;
 const TIDAL_DUPLICATE_COLLECTION_ITEMS: &str = "DUPLICATE_ITEMS_IN_COLLECTION";
 const INACCESSIBLE_SPOTIFY_PLAYLIST_WARNING: &str = "Some Spotify playlists could not be read. Check that you own or collaborate on them, then restart to retry safely.";
@@ -45,7 +46,7 @@ async fn defer_tidal_requests(delay: Duration) {
     *next_request_at = (*next_request_at).max(Instant::now() + delay);
 }
 
-fn tidal_retry_after(response: &Response, retry: u8) -> Duration {
+fn retry_after(response: &Response, retry: u8) -> Duration {
     response
         .headers()
         .get("retry-after")
@@ -277,17 +278,49 @@ impl HttpMusicImportProvider {
     }
 
     async fn spotify_get<T: for<'de> Deserialize<'de>>(&self, url: String) -> Result<T, String> {
-        let response = self
-            .client
-            .get(url)
-            .bearer_auth(&self.spotify_access_token)
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
-        if !response.status().is_success() {
-            return Err(provider_http_error("Spotify", response).await);
+        self.spotify_request(|| {
+            self.client
+                .get(&url)
+                .bearer_auth(&self.spotify_access_token)
+        })
+        .await?
+        .json()
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    async fn spotify_request<F>(&self, request: F) -> Result<Response, String>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        for retry in 0..=SPOTIFY_RATE_LIMIT_RETRIES {
+            let response = request()
+                .send()
+                .await
+                .map_err(|error| format!("could not send Spotify request: {error}"))?;
+            if response.status() != StatusCode::TOO_MANY_REQUESTS {
+                return if response.status().is_success() {
+                    Ok(response)
+                } else {
+                    Err(provider_http_error("Spotify", response).await)
+                };
+            }
+
+            if retry == SPOTIFY_RATE_LIMIT_RETRIES {
+                return Err(
+                    "Spotify is temporarily rate limiting imports; please wait and restart this import"
+                        .to_string(),
+                );
+            }
+            let delay = retry_after(&response, retry);
+            tracing::warn!(
+                retry,
+                retry_after_seconds = delay.as_secs(),
+                "Spotify rate limited music import request"
+            );
+            sleep(delay).await;
         }
-        response.json().await.map_err(|error| error.to_string())
+        unreachable!("rate-limit retry loop always returns")
     }
 
     async fn tidal_get<T: for<'de> Deserialize<'de>>(&self, url: String) -> Result<T, String> {
@@ -437,7 +470,7 @@ impl HttpMusicImportProvider {
             if retry == TIDAL_RATE_LIMIT_RETRIES {
                 return Err("TIDAL is temporarily rate limiting imports; please wait and restart this import".to_string());
             }
-            let delay = tidal_retry_after(&response, retry);
+            let delay = retry_after(&response, retry);
             tracing::warn!(
                 retry,
                 retry_after_seconds = delay.as_secs(),
@@ -754,35 +787,30 @@ impl MusicImportProvider for HttpMusicImportProvider {
                 .map(|id| format!("spotify:track:{id}"))
                 .collect::<Vec<_>>()
                 .join(",");
-            let response = self
-                .client
-                .put(format!(
-                    "{SPOTIFY_API_BASE}/v1/me/library?uris={}",
-                    query_value(&uris)
-                ))
-                .bearer_auth(&self.spotify_access_token)
-                .send()
-                .await
-                .map_err(|error| error.to_string())?;
-            if !response.status().is_success() {
-                return Err(provider_http_error("Spotify", response).await);
-            }
+            let url = format!(
+                "{SPOTIFY_API_BASE}/v1/me/library?uris={}",
+                query_value(&uris)
+            );
+            self.spotify_request(|| {
+                self.client
+                    .put(&url)
+                    .bearer_auth(&self.spotify_access_token)
+            })
+            .await?;
         }
         Ok(())
     }
 
     async fn create_spotify_playlist(&self, playlist: &TidalPlaylist) -> Result<String, String> {
+        let body = serde_json::json!({ "name": playlist.name, "public": false });
         let response = self
-            .client
-            .post(format!("{SPOTIFY_API_BASE}/v1/me/playlists"))
-            .bearer_auth(&self.spotify_access_token)
-            .json(&serde_json::json!({ "name": playlist.name, "public": false }))
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
-        if !response.status().is_success() {
-            return Err(provider_http_error("Spotify", response).await);
-        }
+            .spotify_request(|| {
+                self.client
+                    .post(format!("{SPOTIFY_API_BASE}/v1/me/playlists"))
+                    .bearer_auth(&self.spotify_access_token)
+                    .json(&body)
+            })
+            .await?;
         response
             .json::<SpotifyPlaylistCreateResponse>()
             .await
@@ -801,33 +829,27 @@ impl MusicImportProvider for HttpMusicImportProvider {
         );
         let mut chunks = track_ids.chunks(100);
         let first = chunks.next().unwrap_or_default();
-        let response = self
-            .client
-            .put(&url)
-            .bearer_auth(&self.spotify_access_token)
-            .json(&serde_json::json!({
-                "uris": first.iter().map(|id| format!("spotify:track:{id}")).collect::<Vec<_>>(),
-            }))
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
-        if !response.status().is_success() {
-            return Err(provider_http_error("Spotify", response).await);
-        }
-        for ids in chunks {
-            let response = self
-                .client
-                .post(&url)
+        let body = serde_json::json!({
+            "uris": first.iter().map(|id| format!("spotify:track:{id}")).collect::<Vec<_>>(),
+        });
+        self.spotify_request(|| {
+            self.client
+                .put(&url)
                 .bearer_auth(&self.spotify_access_token)
-                .json(&serde_json::json!({
-                    "uris": ids.iter().map(|id| format!("spotify:track:{id}")).collect::<Vec<_>>(),
-                }))
-                .send()
-                .await
-                .map_err(|error| error.to_string())?;
-            if !response.status().is_success() {
-                return Err(provider_http_error("Spotify", response).await);
-            }
+                .json(&body)
+        })
+        .await?;
+        for ids in chunks {
+            let body = serde_json::json!({
+                "uris": ids.iter().map(|id| format!("spotify:track:{id}")).collect::<Vec<_>>(),
+            });
+            self.spotify_request(|| {
+                self.client
+                    .post(&url)
+                    .bearer_auth(&self.spotify_access_token)
+                    .json(&body)
+            })
+            .await?;
         }
         Ok(())
     }
@@ -2812,6 +2834,64 @@ mod tests {
                     "application/vnd.api+json".to_string(),
                     "application/vnd.api+json".to_string(),
                 ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_a_rate_limited_spotify_request_after_retry_after() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let authorizations = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().route(
+            "/spotify-search",
+            get({
+                let attempts = Arc::clone(&attempts);
+                let authorizations = Arc::clone(&authorizations);
+                move |headers: HeaderMap| {
+                    let attempts = Arc::clone(&attempts);
+                    let authorizations = Arc::clone(&authorizations);
+                    async move {
+                        authorizations.lock().unwrap().push(
+                            headers
+                                .get(header::AUTHORIZATION)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                        );
+                        if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                            (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "0")])
+                                .into_response()
+                        } else {
+                            StatusCode::OK.into_response()
+                        }
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base("http://unused".to_string());
+        let url = format!("http://{address}/spotify-search");
+
+        provider
+            .spotify_request(|| {
+                provider
+                    .client
+                    .get(&url)
+                    .bearer_auth(&provider.spotify_access_token)
+            })
+            .await
+            .unwrap();
+
+        server.abort();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *authorizations.lock().unwrap(),
+            vec![
+                "Bearer spotify-access-token".to_string(),
+                "Bearer spotify-access-token".to_string(),
             ]
         );
     }
