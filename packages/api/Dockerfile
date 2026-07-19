@@ -22,8 +22,11 @@ COPY migrations migrations
 # Build release binary
 RUN cargo build --release --locked --bin hamrah-server
 
-# Create non-root user
-RUN useradd -m -u 1000 appuser
-USER appuser
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 
-CMD ["/app/target/release/hamrah-server"]
+WORKDIR /app
+
+COPY --from=builder --chown=nonroot:nonroot /app/target/release/hamrah-server /app/hamrah-server
+
+USER nonroot:nonroot
+ENTRYPOINT ["/app/hamrah-server"]

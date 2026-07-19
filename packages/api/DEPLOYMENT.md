@@ -24,6 +24,10 @@ GitHub Actions builds and pushes an image, resolves its immutable digest, then
 creates a Cloud Deploy release. Cloud Deploy replaces the `hamrah-api` image
 placeholder in the service manifest and records the rendered manifest.
 
+The production image uses `gcr.io/distroless/cc-debian13:nonroot`. The Cargo
+Chef build stages and the GitHub Actions BuildKit cache remain separate from the
+runtime image, so compilers and build tooling are never shipped to Cloud Run.
+
 `APPLE_TEAM_ID`, `SPOTIFY_CLIENT_ID`, and `TIDAL_CLIENT_ID` are non-secret
 GitHub repository variables. They are Cloud Deploy release parameters, declared
 with `from-param` directives in the service manifest. They are not interpolated
@@ -126,6 +130,32 @@ gcloud artifacts repositories create hamrah \
   --location=us-central1 \
   --project=hamrah-ai
 ```
+
+### Image retention
+
+`deploy/artifact-registry-cleanup-policy.json` retains the current API build and
+the previous API build. Each GitHub Actions build publishes three related
+OCI versions (the tagged image index, runnable manifest, and provenance
+attestation), so the policy keeps six versions rather than two. It deletes
+only versions in the `hamrah-api` package; other packages in the repository are
+unaffected.
+
+Apply the checked-in policy after creating the repository, and whenever the
+policy changes:
+
+```bash
+gcloud artifacts repositories set-cleanup-policies hamrah \
+  --project=hamrah-ai \
+  --location=us-central1 \
+  --policy=packages/api/deploy/artifact-registry-cleanup-policy.json \
+  --no-dry-run
+```
+
+Artifact Registry evaluates cleanup policies in a background job, so removals
+can take about a day. The policy is intentionally applied as infrastructure
+bootstrap instead of by every deploy: applying it needs
+`artifactregistry.repositories.update`, which the GitHub deploy identity does
+not need for normal image publishing.
 
 ## GitHub Actions setup
 
