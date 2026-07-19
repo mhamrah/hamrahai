@@ -409,7 +409,14 @@ impl HttpMusicImportProvider {
     {
         for retry in 0..=TIDAL_RATE_LIMIT_RETRIES {
             wait_for_tidal_request_slot().await;
-            let response = request().send().await.map_err(|error| error.to_string())?;
+            let request = request().build().map_err(|error| {
+                tracing::warn!(error = ?error, "could not build TIDAL music request");
+                format!("could not build TIDAL request: {error}")
+            })?;
+            let response = self.client.execute(request).await.map_err(|error| {
+                tracing::warn!(error = ?error, "could not send TIDAL music request");
+                format!("could not send TIDAL request: {error}")
+            })?;
             if response.status() != StatusCode::TOO_MANY_REQUESTS {
                 return if response.status().is_success() {
                     Ok(response)
