@@ -37,7 +37,7 @@ struct MusicManagementView: View {
                 }
             }
             Section("Music sync") {
-                Text("Syncs owned playlists and Liked Songs in both directions using exact ISRC matches. Same-name TIDAL playlists are merged into one complete copy before the extras are removed. Provider rate limits pause and resume automatically; removing music from either provider never removes it from the other.")
+                Text("Syncs owned playlists and Liked Songs in both directions. Spotify-to-TIDAL matches use ISRC first, then exact title and artist when releases use different ISRCs; TIDAL-to-Spotify matches remain ISRC-only. Same-name TIDAL playlists are merged into one complete copy before the extras are removed. Provider rate limits pause and resume automatically; removing music from either provider never removes it from the other.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Include saved Spotify playlists", isOn: $includeSavedPlaylists).disabled(latest?.isActive == true)
                 Button(actionTitle) { Task { await startOrRestart() } }

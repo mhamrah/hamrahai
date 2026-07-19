@@ -41,7 +41,7 @@ struct MusicImportDTOTests {
             playlistTracksImported: 7
         )
 
-        #expect(musicImport.stageDescription == "Adding exact playlist-track matches to TIDAL")
+        #expect(musicImport.stageDescription == "Adding matched playlist tracks to TIDAL")
         #expect(musicImport.stageProgress?.current == 7)
         #expect(musicImport.stageProgress?.total == 11)
         #expect(musicImport.stageProgress?.label == "7 of 11 playlist tracks added")

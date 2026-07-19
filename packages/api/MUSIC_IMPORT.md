@@ -24,9 +24,10 @@ TIDAL.
   playlist. Its same-name TIDAL copies are consolidated before removal.
 - Reconciliation is additive. Removing a song from either provider does not
   remove it from the other provider.
-- Cross-provider song matches require an exact normalized ISRC. Missing or
-  unavailable ISRCs are reported as unmatched; title/artist heuristics are not
-  used.
+- Cross-provider song matches prefer an exact normalized ISRC. When Spotify and
+  TIDAL use different ISRCs for the same release, Spotify-to-TIDAL matching
+  falls back to an exact case- and whitespace-insensitive title and primary
+  artist match. TIDAL-to-Spotify matching remains ISRC-only.
 - A TIDAL track write reported as `ALREADY_PRESENT` is a reconciled no-op, not
   an unmatched song. Other skipped TIDAL writes remain unmatched.
 - Duplicate TIDAL content is copied directly by TIDAL track ID before a
@@ -68,7 +69,8 @@ Each run:
 3. Reads every selected playlist's tracks.
 4. Groups same-name playlists, chooses a present canonical TIDAL playlist, and
    copies all TIDAL duplicate content into it.
-5. Adds exact-ISRC Spotify-only songs to TIDAL and TIDAL-only songs to Spotify.
+5. Adds matched Spotify-only songs to TIDAL and exact-ISRC TIDAL-only songs to
+   Spotify.
 6. Persists the Spotify/TIDAL mapping and reconciled content hash.
 7. Deletes extra same-name TIDAL playlists only after their content is safe in
    the canonical playlist.
@@ -102,9 +104,10 @@ retains and retries the current task.
 
 Spotify and TIDAL requests retry short `429 Too Many Requests` waits inline.
 A `Retry-After` longer than 15 seconds is converted into a scheduled Cloud Task
-instead of sleeping inside Cloud Run. Spotify ISRC search results are cached
-after each lookup so a later rate limit does not discard completed catalog
-work. TIDAL write retries retain stable import-specific idempotency keys.
+instead of sleeping inside Cloud Run. Catalog matches are cached after each
+lookup so a later rate limit does not discard completed work. A successful
+TIDAL metadata fallback is cached against the source ISRC for later playlists
+and retries. TIDAL write retries retain stable import-specific idempotency keys.
 Artist-follow payloads are sorted, and their keys include a payload fingerprint,
 so a restart cannot reuse a key with differently ordered artist IDs.
 
@@ -167,7 +170,7 @@ Use an allowlisted Spotify account and the intended TIDAL account.
 3. In Spotify, leave the matching playlists and any Spotify-only songs in place.
 4. Start a sync with owned playlists selected.
 5. Verify each name has one TIDAL playlist containing the union of all former
-   TIDAL copies plus exact Spotify-only matches.
+   TIDAL copies plus matched Spotify-only songs.
 6. Verify the matching Spotify playlist contains exact TIDAL-only matches.
 7. Verify TIDAL-only playlist names now have a Spotify counterpart.
 8. Review unmatched songs; their original provider content must still exist.
@@ -176,6 +179,7 @@ Use an allowlisted Spotify account and the intended TIDAL account.
 ## Deliberately not implemented
 
 This is a user-triggered reconciliation, not a continuously scheduled sync. It
-does not propagate deletions, use heuristic song matching, copy artwork or
+does not propagate deletions, use fuzzy song matching, copy artwork or
 descriptions, or infer that same-name TIDAL playlists were created by another
-application.
+application. The metadata fallback requires both an exact normalized title and
+an exact normalized primary artist.

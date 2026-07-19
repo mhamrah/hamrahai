@@ -277,6 +277,7 @@ pub(super) trait MusicImportProvider {
         &self,
         isrcs: &[String],
     ) -> Result<HashMap<String, String>, String>;
+    async fn find_tidal_track(&self, track: &SpotifyTrack) -> Result<Option<String>, String>;
     async fn tidal_saved_tracks(&self) -> Result<Vec<TidalSavedTrack>, String>;
     #[allow(dead_code)]
     async fn add_tidal_playlist_tracks(
@@ -1040,6 +1041,82 @@ impl MusicImportProvider for HttpMusicImportProvider {
         }
         self.cache_track_matches("tidal", &missing, &matches).await;
         Ok(matches)
+    }
+
+    async fn find_tidal_track(&self, track: &SpotifyTrack) -> Result<Option<String>, String> {
+        let Some(artist_name) = track.artist_name.as_deref() else {
+            return Ok(None);
+        };
+        let response: TidalTrackSearchResponse = self
+            .tidal_get(format!(
+                "{}/searchResults/{}?include=tracks",
+                self.tidal_api_base,
+                query_value(&format!("{} {artist_name}", track.name))
+            ))
+            .await?;
+        let candidate_ids = response
+            .included
+            .into_iter()
+            .flatten()
+            .filter(|candidate| {
+                candidate
+                    .attributes
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| same_track_name(title, &track.name))
+            })
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>();
+        if candidate_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let mut url = reqwest::Url::parse(&format!("{}/tracks", self.tidal_api_base))
+            .map_err(|error| error.to_string())?;
+        url.query_pairs_mut()
+            .extend_pairs(candidate_ids.iter().map(|id| ("filter[id]", id)))
+            .append_pair("include", "artists");
+        let response: TidalTracksWithArtistsResponse = self.tidal_get(url.to_string()).await?;
+        let matching_artist_ids = response
+            .included
+            .into_iter()
+            .flatten()
+            .filter(|artist| {
+                artist.resource_type == "artists"
+                    && artist
+                        .attributes
+                        .as_ref()
+                        .is_some_and(|attributes| same_artist_name(&attributes.name, artist_name))
+            })
+            .map(|artist| artist.id)
+            .collect::<HashSet<_>>();
+
+        let matched_id = response
+            .data
+            .into_iter()
+            .find(|candidate| {
+                candidate
+                    .attributes
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| same_track_name(title, &track.name))
+                    && candidate
+                        .relationships
+                        .artists
+                        .data
+                        .iter()
+                        .any(|artist| matching_artist_ids.contains(&artist.id))
+            })
+            .map(|candidate| candidate.id);
+        if let (Some(isrc), Some(track_id)) = (&track.isrc, &matched_id) {
+            self.cache_track_matches(
+                "tidal",
+                std::slice::from_ref(isrc),
+                &HashMap::from([(isrc.clone(), track_id.clone())]),
+            )
+            .await;
+        }
+        Ok(matched_id)
     }
 
     async fn tidal_saved_tracks(&self) -> Result<Vec<TidalSavedTrack>, String> {
@@ -1986,31 +2063,46 @@ where
         .cloned()
         .collect::<Vec<_>>();
     let tidal_tracks = provider.tidal_tracks_by_isrc(&isrcs).await?;
-    let tidal_track_ids = tracks
-        .iter()
-        .filter_map(|track| track.isrc.as_ref())
-        .filter_map(|isrc| tidal_tracks.get(isrc))
-        .cloned()
-        .collect::<Vec<_>>();
-    let unmatched = tracks
-        .iter()
-        .filter(|track| {
-            track
-                .isrc
-                .as_ref()
-                .is_none_or(|isrc| !tidal_tracks.contains_key(isrc))
-        })
-        .cloned()
-        .map(|track| UnmatchedTrack {
-            reason: if track.isrc.is_some() {
-                "not_available_in_tidal"
+    let mut tidal_track_ids = Vec::new();
+    let mut unmatched = Vec::new();
+    let mut metadata_matches: HashMap<(String, String), Option<String>> = HashMap::new();
+    for track in tracks {
+        if let Some(track_id) = track.isrc.as_ref().and_then(|isrc| tidal_tracks.get(isrc)) {
+            tidal_track_ids.push(track_id.clone());
+            continue;
+        }
+
+        let metadata_key = track.artist_name.as_ref().map(|artist_name| {
+            (
+                normalize_track_name(&track.name),
+                normalize_artist_name(artist_name),
+            )
+        });
+        let metadata_match = if let Some(key) = metadata_key {
+            if let Some(cached) = metadata_matches.get(&key) {
+                cached.clone()
             } else {
-                "missing_isrc"
-            },
-            source_collection: source_collection.clone(),
-            track,
-        })
-        .collect();
+                let found = provider.find_tidal_track(track).await?;
+                metadata_matches.insert(key, found.clone());
+                found
+            }
+        } else {
+            None
+        };
+        if let Some(track_id) = metadata_match {
+            tidal_track_ids.push(track_id);
+        } else {
+            unmatched.push(UnmatchedTrack {
+                reason: if track.isrc.is_some() {
+                    "not_available_in_tidal"
+                } else {
+                    "missing_isrc"
+                },
+                source_collection: source_collection.clone(),
+                track: track.clone(),
+            });
+        }
+    }
     Ok((tidal_track_ids, unmatched))
 }
 
@@ -2037,6 +2129,14 @@ fn same_artist_name(left: &str, right: &str) -> bool {
 }
 
 fn normalize_artist_name(value: &str) -> String {
+    value.split_whitespace().map(str::to_lowercase).collect()
+}
+
+fn same_track_name(left: &str, right: &str) -> bool {
+    normalize_track_name(left) == normalize_track_name(right)
+}
+
+fn normalize_track_name(value: &str) -> String {
     value.split_whitespace().map(str::to_lowercase).collect()
 }
 
@@ -2239,9 +2339,40 @@ struct TidalTracksResponse {
 }
 
 #[derive(Deserialize)]
+struct TidalTrackSearchResponse {
+    included: Option<Vec<TidalTrackResource>>,
+}
+
+#[derive(Deserialize)]
 struct TidalTrackResource {
     id: String,
     attributes: TidalTrackAttributes,
+}
+
+#[derive(Deserialize)]
+struct TidalTracksWithArtistsResponse {
+    data: Vec<TidalTrackWithArtists>,
+    included: Option<Vec<TidalArtistResource>>,
+}
+
+#[derive(Deserialize)]
+struct TidalTrackWithArtists {
+    id: String,
+    attributes: TidalTrackAttributes,
+    #[serde(default)]
+    relationships: TidalTrackRelationships,
+}
+
+#[derive(Default, Deserialize)]
+struct TidalTrackRelationships {
+    #[serde(default)]
+    artists: TidalRelationshipData,
+}
+
+#[derive(Default, Deserialize)]
+struct TidalRelationshipData {
+    #[serde(default)]
+    data: Vec<TidalRelationshipItem>,
 }
 
 #[derive(Deserialize)]
@@ -2323,6 +2454,7 @@ mod tests {
         routing::{get, post},
     };
 
+    #[derive(Default)]
     struct FakeProvider {
         playlists: Vec<SpotifyPlaylist>,
         playlist_tracks: HashMap<String, Vec<SpotifyTrack>>,
@@ -2467,6 +2599,14 @@ mod tests {
                 })
                 .collect())
         }
+        async fn find_tidal_track(&self, track: &SpotifyTrack) -> Result<Option<String>, String> {
+            Ok((same_track_name(&track.name, "First Day of My Life")
+                && track
+                    .artist_name
+                    .as_deref()
+                    .is_some_and(|artist| same_artist_name(artist, "Bright Eyes")))
+            .then(|| "tidal-metadata-match".to_string()))
+        }
         async fn tidal_saved_tracks(&self) -> Result<Vec<TidalSavedTrack>, String> {
             Ok(self.tidal_saved_tracks.clone())
         }
@@ -2554,6 +2694,26 @@ mod tests {
             source_id: Some(source_id.to_string()),
             ..track(Some(isrc))
         }
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_exact_title_and_artist_when_tidal_uses_a_different_isrc() {
+        let provider = FakeProvider::default();
+        let tracks = vec![SpotifyTrack {
+            source_id: Some("spotify-track".to_string()),
+            isrc: Some("US-SPOTIFY-ISRC".to_string()),
+            name: "First Day of My Life".to_string(),
+            artist_name: Some("Bright Eyes".to_string()),
+            album_name: Some("I'm Wide Awake, It's Morning".to_string()),
+        }];
+
+        let (matches, unmatched) =
+            match_tidal_tracks(&provider, &tracks, "Liked Songs".to_string())
+                .await
+                .unwrap();
+
+        assert_eq!(matches, vec!["tidal-metadata-match".to_string()]);
+        assert!(unmatched.is_empty());
     }
 
     #[test]
@@ -4102,6 +4262,87 @@ mod tests {
                 ("US-AAA-01".to_string(), "tidal-a".to_string()),
                 ("US-BBB-02".to_string(), "tidal-b".to_string()),
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn searches_tidal_by_title_and_verifies_the_exact_artist() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(
+                "/searchResults/{query}",
+                get({
+                    let requests = Arc::clone(&requests);
+                    move |uri: Uri, headers: HeaderMap| {
+                        let requests = Arc::clone(&requests);
+                        async move {
+                            requests.lock().unwrap().push((
+                                uri.path().to_string(),
+                                uri.query().unwrap_or_default().to_string(),
+                                headers.get("accept").unwrap().to_str().unwrap().to_string(),
+                            ));
+                            (
+                                StatusCode::OK,
+                                [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                                r#"{"data":{"id":"First Day of My Life Bright Eyes","type":"searchResults"},"included":[{"id":"tidal-candidate","type":"tracks","attributes":{"title":"First Day of My Life"}}]}"#,
+                            )
+                                .into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/tracks",
+                get({
+                    let requests = Arc::clone(&requests);
+                    move |uri: Uri, headers: HeaderMap| {
+                        let requests = Arc::clone(&requests);
+                        async move {
+                            requests.lock().unwrap().push((
+                                uri.path().to_string(),
+                                uri.query().unwrap_or_default().to_string(),
+                                headers.get("accept").unwrap().to_str().unwrap().to_string(),
+                            ));
+                            (
+                                StatusCode::OK,
+                                [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                                r#"{"data":[{"id":"tidal-candidate","type":"tracks","attributes":{"title":"First Day of My Life"},"relationships":{"artists":{"data":[{"id":"bright-eyes","type":"artists"}]}}}],"included":[{"id":"bright-eyes","type":"artists","attributes":{"name":"Bright Eyes"}}]}"#,
+                            )
+                                .into_response()
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+        let track = SpotifyTrack {
+            source_id: Some("spotify-track".to_string()),
+            isrc: Some("US-SPOTIFY-ISRC".to_string()),
+            name: "First Day of My Life".to_string(),
+            artist_name: Some("Bright Eyes".to_string()),
+            album_name: Some("I'm Wide Awake, It's Morning".to_string()),
+        };
+
+        let matched = provider.find_tidal_track(&track).await.unwrap();
+
+        server.abort();
+        assert_eq!(matched, Some("tidal-candidate".to_string()));
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![
+                (
+                    "/searchResults/First%20Day%20of%20My%20Life%20Bright%20Eyes".to_string(),
+                    "include=tracks".to_string(),
+                    TIDAL_MEDIA_TYPE.to_string(),
+                ),
+                (
+                    "/tracks".to_string(),
+                    "filter%5Bid%5D=tidal-candidate&include=artists".to_string(),
+                    TIDAL_MEDIA_TYPE.to_string(),
+                ),
+            ]
         );
     }
 
