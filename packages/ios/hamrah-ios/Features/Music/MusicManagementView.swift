@@ -38,7 +38,7 @@ struct MusicManagementView: View {
                 }
             }
             Section("Music sync") {
-                Text("Transfers exact ISRC matches for playlists, Liked Songs, and followed artists. Liked Songs added in TIDAL are saved to Spotify; removing music in TIDAL never removes it from Spotify.")
+                Text("Syncs owned playlists in both directions using exact ISRC matches. Liked Songs added in TIDAL are saved to Spotify; removing music in TIDAL never removes it from Spotify.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Include saved Spotify playlists", isOn: $includeSavedPlaylists).disabled(latest?.isActive == true)
                 Toggle("Sync Liked Songs", isOn: $includeSavedTracks).disabled(latest?.isActive == true)
