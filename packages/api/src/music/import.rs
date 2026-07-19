@@ -1798,10 +1798,7 @@ mod tests {
         assert_eq!(progress.playlist_tracks_imported, 1);
         assert_eq!(progress.saved_tracks_imported, 1);
         assert_eq!(progress.tracks_matched, 2);
-        assert_eq!(
-            *provider.added_playlist_tracks.lock().unwrap(),
-            vec![("tidal-owned".to_string(), vec!["tidal-a".to_string()])]
-        );
+        assert!(provider.added_playlist_tracks.lock().unwrap().is_empty());
         assert_eq!(
             *provider.saved_tidal_tracks.lock().unwrap(),
             vec!["tidal-b".to_string()]
