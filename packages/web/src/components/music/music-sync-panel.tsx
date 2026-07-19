@@ -1,6 +1,7 @@
 import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import type {
   MusicConnectionWire,
+  MusicImportActivityWire,
   MusicImportWire,
   MusicUnmatchedTrackWire,
   MusicProvider,
@@ -92,6 +93,8 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     props.initialImports[0]?.include_saved_tracks ?? false,
   );
   const isImporting = useSignal(false);
+  const importActivity = useSignal<MusicImportActivityWire[]>([]);
+  const loadedActivityFor = useSignal<string | undefined>();
 
   // eslint-disable-next-line qwik/no-use-visible-task -- Polling must run in the signed-in browser session.
   useVisibleTask$(({ cleanup, track }) => {
@@ -102,6 +105,13 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
       try {
         imports.value =
           await createApiClient().get<MusicImportWire[]>("/v1/music/imports");
+        const active = imports.value.find(isActiveImport);
+        if (active) {
+          importActivity.value = await createApiClient().get<MusicImportActivityWire[]>(
+            `/v1/music/imports/${active.id}/activity`,
+          );
+          loadedActivityFor.value = active.id;
+        }
       } catch {
         // Preserve the most recent status while a transient network request fails.
       }
@@ -252,6 +262,38 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     }
   });
 
+  const loadActivity = $(async (importId: string) => {
+    const run = imports.value.find((item) => item.id === importId);
+    if (loadedActivityFor.value === importId && run && !isActiveImport(run)) {
+      loadedActivityFor.value = undefined;
+      importActivity.value = [];
+      return;
+    }
+    error.value = undefined;
+    try {
+      importActivity.value = await createApiClient().get<MusicImportActivityWire[]>(
+        `/v1/music/imports/${importId}/activity`,
+      );
+      loadedActivityFor.value = importId;
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : "Unable to load import activity.";
+    }
+  });
+
+  const removeImport = $(async (importId: string) => {
+    error.value = undefined;
+    try {
+      await createApiClient().delete(`/v1/music/imports/${importId}`);
+      imports.value = imports.value.filter((run) => run.id !== importId);
+      if (loadedActivityFor.value === importId) {
+        loadedActivityFor.value = undefined;
+        importActivity.value = [];
+      }
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : "Unable to remove import history.";
+    }
+  });
+
   return (
     <section>
       <h2 class="text-xl font-semibold text-gray-950">Music management</h2>
@@ -391,6 +433,9 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
             {run.saved_track_total} Liked Songs ·{" "}
             {run.artist_total} followed artists.
           </p>
+          <p class="mt-2 rounded bg-white px-2 py-1 text-xs text-gray-700" aria-live="polite">
+            Current activity: {run.activity}
+          </p>
           <p class="mt-1">
             {run.playlists_imported} playlists created ·{" "}
             {run.playlist_tracks_imported} playlist tracks added ·{" "}
@@ -415,6 +460,37 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
                 ? "Hide unsupported songs"
                 : `Review ${run.unmatched_items} unsupported songs`}
             </button>
+          )}
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button
+              class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800"
+              onClick$={() => loadActivity(run.id)}
+            >
+              {loadedActivityFor.value === run.id && !isActiveImport(run)
+                ? "Hide activity"
+                : "View activity"}
+            </button>
+            {!isActiveImport(run) && (
+              <button
+                class="rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700"
+                onClick$={() => removeImport(run.id)}
+              >
+                Remove history
+              </button>
+            )}
+          </div>
+          {loadedActivityFor.value === run.id && (
+            <ol class="mt-3 max-h-56 divide-y divide-gray-200 overflow-y-auto rounded-md border border-gray-200 bg-white">
+              {importActivity.value.map((activity) => (
+                <li key={activity.id} class="p-3 text-xs text-gray-700">
+                  <span>{activity.message}</span>
+                  <span class="ml-2 text-gray-500">{formatSyncTime(activity.created_at)}</span>
+                </li>
+              ))}
+              {importActivity.value.length === 0 && (
+                <li class="p-3 text-xs text-gray-600">Activity is not available for this older import.</li>
+              )}
+            </ol>
           )}
           {loadedUnmatchedFor.value === run.id && (
             <ul class="mt-3 divide-y divide-gray-200 rounded-md border border-gray-200 bg-white">

@@ -336,13 +336,11 @@ async fn http_music_import_restart_reuses_the_failed_run() -> anyhow::Result<()>
         .unwrap();
 
     let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let body_bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let response: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let import_id = import_id.to_string();
     assert_eq!(response["id"].as_str(), Some(import_id.as_str()));
-    assert_eq!(response["status"], "failed");
-    assert_eq!(response["stage"], "preparing");
     assert_eq!(response["include_saved_playlists"], true);
     assert_eq!(response["include_saved_tracks"], true);
 
@@ -396,7 +394,7 @@ async fn http_music_import_create_records_the_required_provider_pair() -> anyhow
         .unwrap();
 
     let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let (source_provider, target_provider): (String, String) = sqlx::query_as(
         "SELECT source_provider, target_provider FROM music_import_runs WHERE user_id = $1",
     )

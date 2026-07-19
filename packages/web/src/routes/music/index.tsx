@@ -5,20 +5,23 @@ import { MusicSyncPanel } from "~/components/music/music-sync-panel";
 import { createApiClient } from "~/lib/auth/api-client";
 
 export const useMusicLoader = routeLoader$(async (event) => {
-  try {
-    const client = createApiClient(event);
-    const [connections, imports] = await Promise.all([
-      client.get<MusicConnectionWire[]>("/v1/music/connections"),
-      client.get<MusicImportWire[]>("/v1/music/imports"),
-    ]);
-    return { connections, imports };
-  } catch (error) {
-    return {
-      connections: [],
-      imports: [],
-      error: error instanceof Error ? error.message : "Unable to load music management.",
-    };
-  }
+  const client = createApiClient(event);
+  const [connections, imports] = await Promise.allSettled([
+    client.get<MusicConnectionWire[]>("/v1/music/connections"),
+    client.get<MusicImportWire[]>("/v1/music/imports"),
+  ]);
+  const errors = [connections, imports]
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) =>
+      result.reason instanceof Error ? result.reason.message : "A music request failed.",
+    );
+  return {
+    connections: connections.status === "fulfilled" ? connections.value : [],
+    imports: imports.status === "fulfilled" ? imports.value : [],
+    error: errors.length
+      ? `Some music data could not be refreshed: ${errors.join(" ")}`
+      : undefined,
+  };
 });
 
 export default component$(() => {

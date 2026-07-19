@@ -133,6 +133,7 @@ pub(super) struct UnmatchedTrack {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ImportProgress {
     pub stage: &'static str,
+    pub activity: String,
     pub playlist_total: i32,
     pub playlists_imported: i32,
     pub artist_total: i32,
@@ -152,6 +153,7 @@ impl Default for ImportProgress {
     fn default() -> Self {
         Self {
             stage: "preparing",
+            activity: "Preparing secure connections".to_string(),
             playlist_total: 0,
             playlists_imported: 0,
             artist_total: 0,
@@ -1075,6 +1077,7 @@ where
     let mut outcome = ImportOutcome::default();
     let mut progress = ImportProgress {
         stage: "reading_spotify",
+        activity: "Reading Spotify playlists, liked songs, and followed artists".to_string(),
         ..ImportProgress::default()
     };
     report_progress(progress.clone()).await;
@@ -1108,6 +1111,8 @@ where
     let mut playlist_tracks = Vec::with_capacity(playlists.len());
     let mut skipped_playlists = 0_i32;
     for playlist in playlists {
+        progress.activity = format!("Reading Spotify playlist: {}", playlist.name);
+        report_progress(progress.clone()).await;
         match provider.spotify_playlist_tracks(&playlist.id).await {
             Ok(tracks) => playlist_tracks.push((playlist, tracks)),
             Err(message) if is_inaccessible_spotify_playlist_error(&message) => {
@@ -1173,6 +1178,7 @@ where
     } else {
         "creating_playlists"
     };
+    progress.activity = "Reading your existing TIDAL playlists for reconciliation".to_string();
     report_progress(progress.clone()).await;
     let tidal_playlists =
         provider
@@ -1189,6 +1195,8 @@ where
     // immediately overwriting it later in this run.
     if options.include_owned_playlists {
         for tidal_playlist in &tidal_playlists {
+            progress.activity = format!("Reading TIDAL playlist: {}", tidal_playlist.name);
+            report_progress(progress.clone()).await;
             let tidal_tracks = provider
                 .tidal_playlist_tracks(&tidal_playlist.id)
                 .await
@@ -1242,6 +1250,10 @@ where
                 })?;
             outcome.imported_items += spotify_track_ids.len() as i32;
             progress.playlist_tracks_imported += spotify_track_ids.len() as i32;
+            progress.activity = format!(
+                "Updated Spotify playlist from TIDAL: {}",
+                tidal_playlist.name
+            );
             report_progress(progress.clone()).await;
         }
     }
@@ -1253,14 +1265,20 @@ where
             TidalPlaylistVisibility::Unlisted
         };
         let tidal_playlist_id = if let Some(existing) = existing_tidal_playlists.get(&playlist.id) {
+            progress.activity = format!("Reusing TIDAL playlist: {}", playlist.name);
+            report_progress(progress.clone()).await;
             existing.clone()
         } else if let Some(existing) = tidal_playlists
             .iter()
             .find(|candidate| same_playlist_name(&candidate.name, &playlist.name))
         {
+            progress.activity = format!("Reusing existing TIDAL playlist: {}", playlist.name);
+            report_progress(progress.clone()).await;
             report_playlist_created(&playlist, &existing.id).await;
             existing.id.clone()
         } else {
+            progress.activity = format!("Creating TIDAL playlist: {}", playlist.name);
+            report_progress(progress.clone()).await;
             let created = provider
                 .create_tidal_playlist(
                     &playlist,
@@ -1281,6 +1299,7 @@ where
         };
 
         progress.stage = "adding_playlist_tracks";
+        progress.activity = format!("Matching songs for TIDAL playlist: {}", playlist.name);
         report_progress(progress.clone()).await;
         let mut desired_tidal_track_ids = Vec::new();
         for tracks in tracks.chunks(50) {
@@ -1316,9 +1335,13 @@ where
             })?;
         outcome.imported_items += desired_tidal_track_ids.len() as i32;
         progress.playlist_tracks_imported += desired_tidal_track_ids.len() as i32;
+        progress.activity = format!("Replaced TIDAL playlist songs: {}", playlist.name);
+        report_progress(progress.clone()).await;
         for duplicate in tidal_playlists.iter().filter(|candidate| {
             candidate.id != tidal_playlist_id && same_playlist_name(&candidate.name, &playlist.name)
         }) {
+            progress.activity = format!("Removing duplicate TIDAL playlist: {}", duplicate.name);
+            report_progress(progress.clone()).await;
             provider
                 .delete_tidal_playlist(
                     &duplicate.id,
@@ -1334,10 +1357,12 @@ where
     }
 
     progress.stage = "matching_artists";
+    progress.activity = "Finding exact TIDAL matches for followed artists".to_string();
     report_progress(progress.clone()).await;
     let mut tidal_artist_ids = HashSet::new();
     let artist_count = artists.len();
     for (index, artist) in artists.iter().enumerate() {
+        progress.activity = format!("Checking followed artist: {}", artist.name);
         match provider.find_tidal_artist(&artist.name).await {
             Ok(Some(tidal_artist_id)) => {
                 tidal_artist_ids.insert(tidal_artist_id);
@@ -1364,6 +1389,7 @@ where
     }
     let tidal_artist_ids = tidal_artist_ids.into_iter().collect::<Vec<_>>();
     progress.stage = "following_artists";
+    progress.activity = "Following matched artists in TIDAL".to_string();
     report_progress(progress.clone()).await;
     for (batch_index, artist_ids) in tidal_artist_ids.chunks(50).enumerate() {
         let result = provider
@@ -1386,6 +1412,7 @@ where
 
     if options.include_saved_tracks {
         progress.stage = "saving_liked_tracks";
+        progress.activity = "Reading and matching Liked Songs".to_string();
         report_progress(progress.clone()).await;
         let tidal_saved_tracks =
             provider
@@ -1401,6 +1428,7 @@ where
             .filter_map(|track| track.isrc.as_ref())
             .collect::<HashSet<_>>();
         for (batch_index, tracks) in saved_tracks.chunks(50).enumerate() {
+            progress.activity = format!("Matching Liked Songs batch {}", batch_index + 1);
             let (tidal_track_ids, unmatched) =
                 match_tidal_tracks(provider, tracks, "Liked Songs".to_string())
                     .await
@@ -1414,6 +1442,10 @@ where
             outcome.unmatched_tracks.extend(unmatched);
             progress.tracks_matched += tidal_track_ids.len() as i32;
             if !tidal_track_ids.is_empty() {
+                progress.activity = format!(
+                    "Saving {} matched Liked Songs to TIDAL",
+                    tidal_track_ids.len()
+                );
                 let result = provider
                     .save_tidal_tracks(
                         &tidal_track_ids,
@@ -1480,6 +1512,10 @@ where
             }
         }
         for track_ids in spotify_track_ids.chunks(40) {
+            progress.activity = format!(
+                "Saving {} TIDAL-only Liked Songs to Spotify",
+                track_ids.len()
+            );
             provider
                 .save_spotify_tracks(track_ids)
                 .await
@@ -1494,6 +1530,8 @@ where
         }
         report_progress(progress.clone()).await;
     }
+    progress.activity = "Reconciliation complete".to_string();
+    report_progress(progress.clone()).await;
     Ok((outcome, progress))
 }
 
@@ -2229,6 +2267,7 @@ mod tests {
             followed_artists: Mutex::new(Vec::new()),
         };
 
+        let activities = Arc::new(Mutex::new(Vec::new()));
         execute_import_with_progress(
             &provider,
             Uuid::nil(),
@@ -2239,7 +2278,13 @@ mod tests {
                 include_saved_tracks: false,
             },
             &HashMap::new(),
-            |_| async {},
+            {
+                let activities = activities.clone();
+                move |progress| {
+                    let activities = activities.clone();
+                    async move { activities.lock().unwrap().push(progress.activity) }
+                }
+            },
             |_, _| async {},
         )
         .await
@@ -2251,6 +2296,13 @@ mod tests {
                 "deleted:duplicate".to_string(),
                 TidalPlaylistVisibility::Public,
             )]
+        );
+        assert!(
+            activities
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|activity| { activity == "Removing duplicate TIDAL playlist: owned" })
         );
     }
 

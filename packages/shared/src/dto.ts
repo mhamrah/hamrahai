@@ -241,7 +241,14 @@ export interface MusicImportWire {
   saved_track_total: number;
   saved_tracks_imported: number;
   tracks_matched: number;
+  activity: string;
   error?: string | null;
+  created_at: string;
+}
+
+export interface MusicImportActivityWire {
+  id: string;
+  message: string;
   created_at: string;
 }
 

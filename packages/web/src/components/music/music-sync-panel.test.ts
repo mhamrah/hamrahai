@@ -29,6 +29,7 @@ const failedImport = (error?: string): MusicImportWire => ({
   saved_track_total: 0,
   saved_tracks_imported: 0,
   tracks_matched: 0,
+  activity: "Preparing secure connections",
   error,
   created_at: "2026-07-17T00:00:00Z",
 });
