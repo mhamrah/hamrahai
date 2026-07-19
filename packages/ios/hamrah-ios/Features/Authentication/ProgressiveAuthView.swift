@@ -33,9 +33,7 @@ struct ProgressiveAuthView: View {
                         }
                     }
             } else if authManager.isAuthenticated {
-                InboxView()
-                    .environmentObject(authManager)
-                    .environmentObject(biometricManager)
+                AuthenticatedMainView()
             } else {
                 NativeLoginView()
                     .environmentObject(authManager)
@@ -221,6 +219,35 @@ struct ProgressiveAuthView: View {
 
     private func triggerAuthenticatedSync(reason: String) {
         syncEngine.triggerSync(reason: reason)
+    }
+}
+
+struct AuthenticatedMainView: View {
+    var body: some View {
+        #if os(iOS)
+            TabView {
+                InboxView()
+                    .tabItem {
+                        Label("Inbox", systemImage: "tray")
+                    }
+
+                NavigationStack {
+                    MusicManagementView()
+                }
+                .tabItem {
+                    Label("Music", systemImage: "music.note.list")
+                }
+
+                NavigationStack {
+                    SettingsView()
+                }
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape")
+                }
+            }
+        #else
+            InboxView()
+        #endif
     }
 }
 

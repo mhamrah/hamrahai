@@ -156,6 +156,17 @@ fn default_true() -> bool {
     true
 }
 
+impl CreateImportRequest {
+    fn import_options(&self) -> import::ImportOptions {
+        import::ImportOptions {
+            include_owned_playlists: self.include_owned_playlists,
+            include_saved_playlists: self.include_saved_playlists,
+            include_followed_artists: self.include_followed_artists,
+            include_saved_tracks: true,
+        }
+    }
+}
+
 const IMPORT_PROGRESS_STALE_AFTER_SECONDS: i64 = 300;
 const IMPORT_WORKER_HEARTBEAT_SECONDS: u64 = 60;
 const IMPORT_WORKER_LEASE_SECONDS: i64 = 180;
@@ -1188,16 +1199,6 @@ pub async fn create_import(
         Ok(value) => value,
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
-    if !request.include_owned_playlists
-        && !request.include_saved_playlists
-        && !request.include_followed_artists
-        && !request.include_saved_tracks
-    {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "select at least one music collection",
-        );
-    }
     if let Err(err) = fail_stale_imports(&pool, claims.sub).await {
         tracing::error!(%err, "recover stale music imports");
         return error(
@@ -1229,8 +1230,8 @@ pub async fn create_import(
         );
     }
     let id = Uuid::new_v4();
-    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,status,stage,activity,started_at) VALUES ($1,$2,'spotify','tidal',$3,$4,$5,$6,'queued','queued','Queued for secure background import',NOW())")
-        .bind(id).bind(claims.sub).bind(request.include_owned_playlists).bind(request.include_saved_playlists).bind(request.include_followed_artists).bind(request.include_saved_tracks).execute(&pool).await {
+    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,status,stage,activity,started_at) VALUES ($1,$2,'spotify','tidal',$3,$4,$5,TRUE,'queued','queued','Queued for secure background import',NOW())")
+        .bind(id).bind(claims.sub).bind(request.include_owned_playlists).bind(request.include_saved_playlists).bind(request.include_followed_artists).execute(&pool).await {
         tracing::error!(%err, "create music import");
         return if err.as_database_error().is_some_and(|database_error| database_error.is_unique_violation()) {
             error(StatusCode::CONFLICT, "another music import is already running")
@@ -1238,12 +1239,7 @@ pub async fn create_import(
             error(StatusCode::INTERNAL_SERVER_ERROR, "could not create music import")
         };
     }
-    let options = import::ImportOptions {
-        include_owned_playlists: request.include_owned_playlists,
-        include_saved_playlists: request.include_saved_playlists,
-        include_followed_artists: request.include_followed_artists,
-        include_saved_tracks: request.include_saved_tracks,
-    };
+    let options = request.import_options();
     if let Err(message) = queue_or_run_import(&pool, claims.sub, id, options).await {
         tracing::error!(%message, %id, "queue music import");
         let _ = sqlx::query("UPDATE music_import_runs SET status = 'failed', stage = 'failed', activity = 'Could not queue the background import', error = $1, completed_at = NOW() WHERE id = $2 AND status = 'queued'")
@@ -1302,13 +1298,12 @@ pub async fn restart_import(
         }
     }
     let requested_options = request.map(|Json(value)| value);
-    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET include_owned_playlists = COALESCE($3, include_owned_playlists), include_saved_playlists = COALESCE($4, include_saved_playlists), include_followed_artists = COALESCE($5, include_followed_artists), include_saved_tracks = COALESCE($6, include_saved_tracks), status = 'queued', stage = 'queued', activity = 'Queued for secure background import', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW(), worker_task_name = NULL, next_attempt_at = NULL WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
+    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET include_owned_playlists = COALESCE($3, include_owned_playlists), include_saved_playlists = COALESCE($4, include_saved_playlists), include_followed_artists = COALESCE($5, include_followed_artists), include_saved_tracks = TRUE, status = 'queued', stage = 'queued', activity = 'Queued for secure background import', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW(), worker_task_name = NULL, next_attempt_at = NULL WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
         .bind(import_id)
         .bind(claims.sub)
         .bind(requested_options.as_ref().map(|value| value.include_owned_playlists))
         .bind(requested_options.as_ref().map(|value| value.include_saved_playlists))
         .bind(requested_options.as_ref().map(|value| value.include_followed_artists))
-        .bind(requested_options.as_ref().map(|value| value.include_saved_tracks))
         .fetch_optional(&pool)
         .await
     {
@@ -1649,14 +1644,16 @@ mod tests {
         assert!(!is_retryable_import_status("completed"));
     }
     #[test]
-    fn imports_do_not_request_liked_songs_unless_selected() {
-        let request =
-            serde_json::from_str::<CreateImportRequest>(r#"{"include_owned_playlists":true}"#)
-                .unwrap();
+    fn imports_always_request_liked_songs() {
+        let request = serde_json::from_str::<CreateImportRequest>(
+            r#"{"include_owned_playlists":true,"include_saved_tracks":false}"#,
+        )
+        .unwrap();
 
         assert!(request.include_owned_playlists);
         assert!(request.include_followed_artists);
         assert!(!request.include_saved_tracks);
+        assert!(request.import_options().include_saved_tracks);
     }
     #[test]
     fn cloud_task_uses_google_schedule_and_deadline_wire_names() {

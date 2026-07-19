@@ -1759,15 +1759,16 @@ where
             report_progress(progress.clone()).await;
         }
     }
-    let tidal_artist_ids = tidal_artist_ids.into_iter().collect::<Vec<_>>();
+    let mut tidal_artist_ids = tidal_artist_ids.into_iter().collect::<Vec<_>>();
+    tidal_artist_ids.sort_unstable();
     progress.stage = "following_artists";
     progress.activity = "Following matched artists in TIDAL".to_string();
     report_progress(progress.clone()).await;
-    for (batch_index, artist_ids) in tidal_artist_ids.chunks(50).enumerate() {
+    for artist_ids in tidal_artist_ids.chunks(50) {
         let result = provider
             .follow_tidal_artists(
                 artist_ids,
-                idempotency_key(import_id, &format!("artists:{batch_index}")),
+                artist_follow_idempotency_key(import_id, artist_ids),
             )
             .await
             .map_err(|message| ImportFailure {
@@ -2015,6 +2016,20 @@ where
 
 fn idempotency_key(import_id: Uuid, purpose: &str) -> String {
     format!("{import_id}-{purpose}")
+}
+
+fn artist_follow_idempotency_key(import_id: Uuid, artist_ids: &[String]) -> String {
+    let mut hasher = Sha256::new();
+    for artist_id in artist_ids {
+        hasher.update((artist_id.len() as u64).to_be_bytes());
+        hasher.update(artist_id.as_bytes());
+    }
+    let payload_hash = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    idempotency_key(import_id, &format!("artists:{payload_hash}"))
 }
 
 fn same_artist_name(left: &str, right: &str) -> bool {
@@ -2326,7 +2341,7 @@ mod tests {
         saved_spotify_tracks: Mutex<Vec<String>>,
         created_spotify_playlists: Mutex<Vec<String>>,
         added_spotify_playlist_tracks: Mutex<Vec<(String, Vec<String>)>>,
-        followed_artists: Mutex<Vec<String>>,
+        followed_artists: Mutex<Vec<(Vec<String>, String)>>,
     }
 
     impl MusicImportProvider for FakeProvider {
@@ -2491,19 +2506,23 @@ mod tests {
             })
         }
 
-        async fn find_tidal_artist(&self, _name: &str) -> Result<Option<String>, String> {
-            Ok(self.matched_artist.clone())
+        async fn find_tidal_artist(&self, name: &str) -> Result<Option<String>, String> {
+            Ok(if self.matched_artist.as_deref() == Some("match-by-name") {
+                Some(name.to_string())
+            } else {
+                self.matched_artist.clone()
+            })
         }
 
         async fn follow_tidal_artists(
             &self,
             artist_ids: &[String],
-            _idempotency_key: String,
+            idempotency_key: String,
         ) -> Result<FollowOutcome, String> {
             self.followed_artists
                 .lock()
                 .unwrap()
-                .extend_from_slice(artist_ids);
+                .push((artist_ids.to_vec(), idempotency_key));
             Ok(FollowOutcome {
                 imported_items: artist_ids.len() as i32,
                 unmatched_items: 0,
@@ -2629,7 +2648,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            *provider.followed_artists.lock().unwrap(),
+            provider.followed_artists.lock().unwrap()[0].0,
             vec!["tidal-artist".to_string()]
         );
     }
@@ -3286,6 +3305,200 @@ mod tests {
         assert_ne!(
             idempotency_key(import_id, "playlist:spotify-playlist"),
             idempotency_key(Uuid::new_v4(), "playlist:spotify-playlist")
+        );
+    }
+
+    #[test]
+    fn artist_follow_restarts_use_stable_payloads_and_content_specific_keys() {
+        let import_id = Uuid::new_v4();
+        let mut first = HashSet::new();
+        first.insert("artist-c".to_string());
+        first.insert("artist-a".to_string());
+        first.insert("artist-b".to_string());
+        let mut second = HashSet::new();
+        second.insert("artist-b".to_string());
+        second.insert("artist-c".to_string());
+        second.insert("artist-a".to_string());
+
+        let mut first_payload = first.into_iter().collect::<Vec<_>>();
+        first_payload.sort_unstable();
+        let mut second_payload = second.into_iter().collect::<Vec<_>>();
+        second_payload.sort_unstable();
+
+        assert_eq!(first_payload, second_payload);
+        assert_eq!(
+            artist_follow_idempotency_key(import_id, &first_payload),
+            artist_follow_idempotency_key(import_id, &second_payload)
+        );
+        assert_ne!(
+            artist_follow_idempotency_key(import_id, &first_payload),
+            idempotency_key(import_id, "artists:0")
+        );
+        second_payload.push("artist-d".to_string());
+        assert_ne!(
+            artist_follow_idempotency_key(import_id, &first_payload),
+            artist_follow_idempotency_key(import_id, &second_payload)
+        );
+    }
+
+    #[tokio::test]
+    async fn artist_follow_workflow_reuses_identical_payloads_and_keys_after_restart() {
+        let provider = |artists: Vec<SpotifyArtist>| FakeProvider {
+            playlists: Vec::new(),
+            playlist_tracks: HashMap::new(),
+            playlist_track_errors: HashMap::new(),
+            tidal_playlists: Vec::new(),
+            tidal_playlist_tracks: HashMap::new(),
+            saved_tracks: Vec::new(),
+            tidal_saved_tracks: Vec::new(),
+            tidal_tracks: HashMap::new(),
+            spotify_tracks: HashMap::new(),
+            artists,
+            matched_artist: Some("match-by-name".to_string()),
+            created_playlists: Mutex::new(Vec::new()),
+            added_playlist_tracks: Mutex::new(Vec::new()),
+            saved_tidal_tracks: Mutex::new(Vec::new()),
+            saved_spotify_tracks: Mutex::new(Vec::new()),
+            created_spotify_playlists: Mutex::new(Vec::new()),
+            added_spotify_playlist_tracks: Mutex::new(Vec::new()),
+            followed_artists: Mutex::new(Vec::new()),
+        };
+        let artists = (0..90)
+            .map(|index| SpotifyArtist {
+                name: format!("artist-{index:02}"),
+            })
+            .collect::<Vec<_>>();
+        let first = provider(artists.clone());
+        let second = provider(artists.into_iter().rev().collect());
+        let import_id = Uuid::new_v4();
+        let options = ImportOptions {
+            include_owned_playlists: false,
+            include_saved_playlists: false,
+            include_followed_artists: true,
+            include_saved_tracks: false,
+        };
+
+        execute_import_with_progress(
+            &first,
+            import_id,
+            options,
+            &PlaylistMappings::default(),
+            |_| async {},
+            |_, _| async {},
+            |_, _, _| async {},
+        )
+        .await
+        .unwrap();
+        execute_import_with_progress(
+            &second,
+            import_id,
+            options,
+            &PlaylistMappings::default(),
+            |_| async {},
+            |_, _| async {},
+            |_, _, _| async {},
+        )
+        .await
+        .unwrap();
+
+        let first_requests = first.followed_artists.lock().unwrap();
+        let second_requests = second.followed_artists.lock().unwrap();
+        assert_eq!(*first_requests, *second_requests);
+        assert_eq!(first_requests.len(), 2);
+        assert_eq!(first_requests[0].0.len(), 50);
+        assert_eq!(first_requests[1].0.len(), 40);
+        assert!(
+            first_requests
+                .iter()
+                .all(|(_, key)| !key.ends_with("artists:0"))
+        );
+    }
+
+    #[tokio::test]
+    async fn follows_tidal_artists_with_the_documented_write_contract() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().route(
+            "/userCollectionArtists/me/relationships/items",
+            post({
+                let requests = Arc::clone(&requests);
+                move |uri: Uri,
+                      headers: HeaderMap,
+                      axum::Json(body): axum::Json<serde_json::Value>| {
+                    let requests = Arc::clone(&requests);
+                    async move {
+                        requests.lock().unwrap().push((
+                            uri.path().to_string(),
+                            headers
+                                .get(header::AUTHORIZATION)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                            headers
+                                .get(header::ACCEPT)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                            headers
+                                .get(header::CONTENT_TYPE)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                            headers
+                                .get("idempotency-key")
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                            body,
+                        ));
+                        (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                            r#"{"meta":{"skipped":[]}}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+
+        let outcome = provider
+            .follow_tidal_artists(
+                &["artist-a".to_string(), "artist-b".to_string()],
+                "stable-artist-key".to_string(),
+            )
+            .await
+            .unwrap();
+
+        server.abort();
+        assert_eq!(
+            outcome,
+            FollowOutcome {
+                imported_items: 2,
+                unmatched_items: 0,
+            }
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![(
+                "/userCollectionArtists/me/relationships/items".to_string(),
+                "Bearer tidal-access-token".to_string(),
+                TIDAL_MEDIA_TYPE.to_string(),
+                TIDAL_MEDIA_TYPE.to_string(),
+                "stable-artist-key".to_string(),
+                serde_json::json!({
+                    "data": [
+                        {"type": "artists", "id": "artist-a"},
+                        {"type": "artists", "id": "artist-b"},
+                    ],
+                }),
+            )]
         );
     }
 

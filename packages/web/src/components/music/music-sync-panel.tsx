@@ -2,6 +2,7 @@ import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import type {
   MusicConnectionWire,
   MusicImportActivityWire,
+  MusicImportRequestWire,
   MusicImportWire,
   MusicUnmatchedTrackWire,
   MusicProvider,
@@ -32,6 +33,15 @@ export const failedImportMessage = (run: MusicImportWire) =>
 
 export const musicImportOptionsDisabled = (run?: MusicImportWire) =>
   Boolean(run && isActiveImport(run));
+
+export const musicImportRequest = (
+  include_saved_playlists: boolean,
+): MusicImportRequestWire => ({
+  include_owned_playlists: true,
+  include_saved_playlists,
+  include_followed_artists: true,
+  include_saved_tracks: true,
+});
 
 export const importStage = (run: MusicImportWire) => {
   if (run.status === "failed") {
@@ -92,9 +102,6 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
   const error = useSignal<string | undefined>(props.initialError);
   const includeSaved = useSignal(
     props.initialImports[0]?.include_saved_playlists ?? false,
-  );
-  const includeSavedTracks = useSignal(
-    props.initialImports[0]?.include_saved_tracks ?? false,
   );
   const isImporting = useSignal(false);
   const importActivity = useSignal<MusicImportActivityWire[]>([]);
@@ -169,12 +176,10 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     }, 500);
     try {
       const client = createApiClient();
-      const run = await client.post<MusicImportWire>("/v1/music/imports", {
-        include_owned_playlists: true,
-        include_saved_playlists: includeSaved.value,
-        include_followed_artists: true,
-        include_saved_tracks: includeSavedTracks.value,
-      });
+      const run = await client.post<MusicImportWire>(
+        "/v1/music/imports",
+        musicImportRequest(includeSaved.value),
+      );
       imports.value = [run, ...imports.value];
     } catch (cause) {
       try {
@@ -211,12 +216,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     try {
       const run = await createApiClient().post<MusicImportWire>(
         `/v1/music/imports/${importId}/restart`,
-        {
-          include_owned_playlists: true,
-          include_saved_playlists: includeSaved.value,
-          include_followed_artists: true,
-          include_saved_tracks: includeSavedTracks.value,
-        },
+        musicImportRequest(includeSaved.value),
       );
       imports.value = [
         run,
@@ -372,25 +372,10 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
         />
         Also import playlists saved in my Spotify library
       </label>
-      <label class="mt-3 flex items-center gap-2 text-sm text-gray-700">
-        <input
-          type="checkbox"
-          checked={includeSavedTracks.value}
-          disabled={musicImportOptionsDisabled(imports.value[0])}
-          onChange$={(event) => {
-            includeSavedTracks.value = (
-              event.target as HTMLInputElement
-            ).checked;
-          }}
-        />
-        Sync Liked Songs
-      </label>
-      {includeSavedTracks.value && (
-        <p class="mt-2 text-sm text-gray-600">
-          TIDAL additions are saved to Spotify when the ISRC matches exactly.
-          Removing music in TIDAL never removes it from Spotify. Reconnect Spotify if asked.
-        </p>
-      )}
+      <p class="mt-3 text-sm text-gray-600">
+        Liked Songs always sync in both directions when the ISRC matches exactly.
+        Removing music from either provider never removes it from the other.
+      </p>
       <button
         class="mt-4 w-full rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white transition active:scale-[0.99] disabled:cursor-wait disabled:opacity-50 sm:w-auto"
         disabled={

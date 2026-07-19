@@ -49,7 +49,6 @@ struct SettingsView: View {
     @State private var musicConnections: [MusicConnectionDTO] = []
     @State private var isLoadingMusic = false
     @State private var includeSavedMusicPlaylists = false
-    @State private var includeSavedMusicTracks = false
     @State private var musicImports: [MusicImportDTO] = []
 
     private var availableModelIds: [String] {
@@ -401,7 +400,6 @@ struct SettingsView: View {
             musicImports = imports
             if shouldRestoreOptions, let latestImport = imports.first {
                 includeSavedMusicPlaylists = latestImport.include_saved_playlists
-                includeSavedMusicTracks = latestImport.include_saved_tracks
             }
         } catch where showErrorOnFailure {
             errorMessage = "Failed to load music import status: \(error.localizedDescription)"
@@ -433,14 +431,12 @@ struct SettingsView: View {
             await performMusicImport {
                 try await musicSyncAPI.restartImport(
                     id: latestMusicImport.id,
-                    includeSavedPlaylists: includeSavedMusicPlaylists,
-                    includeSavedTracks: includeSavedMusicTracks)
+                    includeSavedPlaylists: includeSavedMusicPlaylists)
             }
         } else {
             await performMusicImport {
                 try await musicSyncAPI.startImport(
-                    includeSavedPlaylists: includeSavedMusicPlaylists,
-                    includeSavedTracks: includeSavedMusicTracks)
+                    includeSavedPlaylists: includeSavedMusicPlaylists)
             }
         }
     }

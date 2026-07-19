@@ -4,6 +4,7 @@ import type { MusicImportWire } from "@hamrah/shared";
 import {
   failedImportMessage,
   importStage,
+  musicImportRequest,
   musicImportOptionsDisabled,
 } from "./music-sync-panel";
 
@@ -67,6 +68,18 @@ describe("musicImportOptionsDisabled", () => {
         stage: "reading_spotify",
       }),
     ).toBe(true);
+  });
+});
+
+describe("musicImportRequest", () => {
+  it("leaves Liked Songs unconditional at the API boundary", () => {
+    expect(musicImportRequest(true)).toEqual({
+      include_owned_playlists: true,
+      include_saved_playlists: true,
+      include_followed_artists: true,
+      include_saved_tracks: true,
+    });
+    expect(musicImportRequest(false).include_saved_tracks).toBe(true);
   });
 });
 
