@@ -252,7 +252,10 @@ export interface MusicUnmatchedTrackWire {
   artist_name?: string | null;
   album_name?: string | null;
   isrc?: string | null;
-  reason: "missing_isrc" | "not_available_in_tidal";
+  reason:
+    | "missing_isrc"
+    | "not_available_in_tidal"
+    | "not_available_in_spotify";
   created_at: string;
 }
 

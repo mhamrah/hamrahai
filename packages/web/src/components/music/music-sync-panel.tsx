@@ -246,9 +246,8 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     <section>
       <h2 class="text-xl font-semibold text-gray-950">Music management</h2>
       <p class="mt-2 text-sm leading-6 text-gray-600">
-        Copy Spotify playlist tracks and Liked Songs to TIDAL when their ISRC
-        identifiers match exactly, and follow exact artist-name matches. Public
-        Spotify playlists remain public; all others are unlisted.
+        Keeps playlists, followed artists, and exact ISRC matches aligned. Liked
+        Songs added in TIDAL are added to Spotify; removals never delete Spotify music.
       </p>
       {error.value && (
         <p class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
@@ -326,12 +325,12 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
             ).checked;
           }}
         />
-        Also import Spotify Liked Songs
+        Sync Liked Songs
       </label>
       {includeSavedTracks.value && (
         <p class="mt-2 text-sm text-gray-600">
-          Spotify will ask for permission to read your Liked Songs. Reconnect
-          Spotify if requested.
+          TIDAL additions are saved to Spotify when the ISRC matches exactly.
+          Removing music in TIDAL never removes it from Spotify. Reconnect Spotify if asked.
         </p>
       )}
       <button
@@ -404,7 +403,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
                     {[track.artist_name, track.album_name].filter(Boolean).join(" · ") || "Spotify metadata unavailable"}
                   </p>
                   <p class="mt-1 text-xs text-gray-500">
-                    {track.source_collection} · {track.reason === "missing_isrc" ? "Spotify did not provide an ISRC" : "No exact ISRC match was found in TIDAL"}
+                    {track.source_collection} · {track.reason === "missing_isrc" ? "The service did not provide an ISRC" : track.reason === "not_available_in_spotify" ? "No exact ISRC match was found in Spotify" : "No exact ISRC match was found in TIDAL"}
                   </p>
                 </li>
               ))}

@@ -18,7 +18,7 @@ use crate::{auth::require_session_or_claims, db::DbPool};
 
 mod import;
 
-const SPOTIFY_SCOPES: &str = "user-read-private playlist-read-private playlist-read-collaborative user-follow-read user-library-read";
+const SPOTIFY_SCOPES: &str = "user-read-private playlist-read-private playlist-read-collaborative user-follow-read user-library-read user-library-modify";
 // `w_usr` is marked INTERNAL in TIDAL's published authorization scheme and
 // makes its third-party authorization endpoint fail with error 1002.
 const TIDAL_SCOPES: &str =
@@ -748,7 +748,7 @@ async fn run_import(
     };
     let result = async {
         let spotify_required_scopes: &[&str] = if options.include_saved_tracks {
-            &["user-library-read"]
+            &["user-library-read", "user-library-modify"]
         } else {
             &[]
         };
@@ -764,7 +764,12 @@ async fn run_import(
             pool,
             user_id,
             "tidal",
-            &["playlists.read", "collection.read"],
+            &[
+                "playlists.read",
+                "playlists.write",
+                "collection.read",
+                "collection.write",
+            ],
         )
             .await
             .map_err(|message| import::ImportFailure {

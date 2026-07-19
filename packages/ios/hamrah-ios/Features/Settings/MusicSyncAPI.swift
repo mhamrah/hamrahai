@@ -129,7 +129,8 @@ struct MusicUnmatchedTrackDTO: Codable, Identifiable {
     }
 
     var reasonDescription: String {
-        reason == "missing_isrc" ? "Spotify did not provide an ISRC" : "No exact ISRC match was found in TIDAL"
+        if reason == "missing_isrc" { return "The service did not provide an ISRC" }
+        return reason == "not_available_in_spotify" ? "No exact ISRC match was found in Spotify" : "No exact ISRC match was found in TIDAL"
     }
 }
 
