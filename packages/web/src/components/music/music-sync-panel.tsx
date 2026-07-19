@@ -257,8 +257,9 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
       <h2 class="text-xl font-semibold text-gray-950">Music management</h2>
       <p class="mt-2 text-sm leading-6 text-gray-600">
         Syncs owned playlists in both directions and transfers only exact ISRC
-        matches. Liked Songs added in TIDAL are also added to Spotify; removals
-        never delete Spotify music.
+        matches. For each Spotify playlist, duplicate TIDAL playlists with the
+        same name are consolidated into one copy. Liked Songs added in TIDAL are
+        also added to Spotify; removals never delete Spotify music.
       </p>
       {error.value && (
         <p class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
