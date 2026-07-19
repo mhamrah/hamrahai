@@ -7,8 +7,11 @@ use std::{
 
 use reqwest::{Client, Response, StatusCode};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::{sync::Mutex, time::sleep};
 use uuid::Uuid;
+
+use crate::db::DbPool;
 
 use super::query_value;
 
@@ -75,6 +78,19 @@ pub(super) struct SpotifyTrack {
     pub name: String,
     pub artist_name: Option<String>,
     pub album_name: Option<String>,
+}
+
+pub(super) fn playlist_content_hash(tracks: &[SpotifyTrack]) -> String {
+    let mut hasher = Sha256::new();
+    for track in tracks {
+        hasher.update(track.isrc.as_deref().unwrap_or("missing-isrc").as_bytes());
+        hasher.update([0]);
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,25 +273,86 @@ pub(super) struct HttpMusicImportProvider {
     spotify_access_token: String,
     tidal_access_token: String,
     tidal_api_base: String,
+    cache_pool: Option<DbPool>,
 }
 
 impl HttpMusicImportProvider {
-    pub(super) fn new(spotify_access_token: String, tidal_access_token: String) -> Self {
+    fn client() -> Client {
+        Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("music import HTTP client configuration is valid")
+    }
+
+    pub(super) fn new(
+        spotify_access_token: String,
+        tidal_access_token: String,
+        cache_pool: DbPool,
+    ) -> Self {
         Self {
-            client: Client::new(),
+            client: Self::client(),
             spotify_access_token,
             tidal_access_token,
             tidal_api_base: TIDAL_API_BASE.to_string(),
+            cache_pool: Some(cache_pool),
         }
     }
 
     #[cfg(test)]
     fn with_tidal_api_base(tidal_api_base: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Self::client(),
             spotify_access_token: "spotify-access-token".to_string(),
             tidal_access_token: "tidal-access-token".to_string(),
             tidal_api_base,
+            cache_pool: None,
+        }
+    }
+
+    async fn cached_track_matches(
+        &self,
+        provider: &str,
+        isrcs: &[String],
+    ) -> HashMap<String, Option<String>> {
+        let Some(pool) = &self.cache_pool else {
+            return HashMap::new();
+        };
+        match sqlx::query_as::<_, (String, Option<String>)>("SELECT isrc,target_track_id FROM music_catalog_track_mappings WHERE provider = $1 AND isrc = ANY($2) AND expires_at > NOW()")
+            .bind(provider)
+            .bind(isrcs)
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows.into_iter().collect(),
+            Err(error) => {
+                tracing::warn!(%error, provider, "read music catalog mapping cache");
+                HashMap::new()
+            }
+        }
+    }
+
+    async fn cache_track_matches(
+        &self,
+        provider: &str,
+        isrcs: &[String],
+        matches: &HashMap<String, String>,
+    ) {
+        let Some(pool) = &self.cache_pool else {
+            return;
+        };
+        for isrc in isrcs {
+            let expiry_days = if matches.contains_key(isrc) { 30 } else { 1 };
+            if let Err(error) = sqlx::query("INSERT INTO music_catalog_track_mappings (provider,isrc,target_track_id,expires_at) VALUES ($1,$2,$3,NOW() + ($4 * INTERVAL '1 day')) ON CONFLICT (provider,isrc) DO UPDATE SET target_track_id = EXCLUDED.target_track_id, expires_at = EXCLUDED.expires_at, updated_at = NOW()")
+                .bind(provider)
+                .bind(isrc)
+                .bind(matches.get(isrc))
+                .bind(expiry_days)
+                .execute(pool)
+                .await
+            {
+                tracing::warn!(%error, provider, %isrc, "write music catalog mapping cache");
+            }
         }
     }
 
@@ -761,8 +838,17 @@ impl MusicImportProvider for HttpMusicImportProvider {
         &self,
         isrcs: &[String],
     ) -> Result<HashMap<String, String>, String> {
-        let mut matches = HashMap::new();
-        for isrc in isrcs {
+        let cached = self.cached_track_matches("spotify", isrcs).await;
+        let mut matches = cached
+            .iter()
+            .filter_map(|(isrc, track_id)| track_id.as_ref().map(|id| (isrc.clone(), id.clone())))
+            .collect::<HashMap<_, _>>();
+        let missing = isrcs
+            .iter()
+            .filter(|isrc| !cached.contains_key(*isrc))
+            .cloned()
+            .collect::<Vec<_>>();
+        for isrc in &missing {
             let result: SpotifySearchResponse = self
                 .spotify_get(format!(
                     "{SPOTIFY_API_BASE}/v1/search?q={}&type=track&limit=1",
@@ -779,6 +865,8 @@ impl MusicImportProvider for HttpMusicImportProvider {
                 matches.insert(isrc.clone(), track.id);
             }
         }
+        self.cache_track_matches("spotify", &missing, &matches)
+            .await;
         Ok(matches)
     }
 
@@ -912,8 +1000,17 @@ impl MusicImportProvider for HttpMusicImportProvider {
         if isrcs.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut matches = HashMap::new();
-        for isrcs in isrcs.chunks(TIDAL_ISRC_FILTER_LIMIT) {
+        let cached = self.cached_track_matches("tidal", isrcs).await;
+        let mut matches = cached
+            .iter()
+            .filter_map(|(isrc, track_id)| track_id.as_ref().map(|id| (isrc.clone(), id.clone())))
+            .collect::<HashMap<_, _>>();
+        let missing = isrcs
+            .iter()
+            .filter(|isrc| !cached.contains_key(*isrc))
+            .cloned()
+            .collect::<Vec<_>>();
+        for isrcs in missing.chunks(TIDAL_ISRC_FILTER_LIMIT) {
             let mut url = reqwest::Url::parse(&format!("{}/tracks", self.tidal_api_base))
                 .map_err(|error| error.to_string())?;
             url.query_pairs_mut()
@@ -926,6 +1023,7 @@ impl MusicImportProvider for HttpMusicImportProvider {
                     .map(|isrc| (normalize_isrc(&isrc), track.id))
             }));
         }
+        self.cache_track_matches("tidal", &missing, &matches).await;
         Ok(matches)
     }
 
@@ -1059,13 +1157,14 @@ impl MusicImportProvider for HttpMusicImportProvider {
     }
 }
 
-pub(super) async fn execute_import_with_progress<P, F, Fut, G, PlaylistFut>(
+pub(super) async fn execute_import_with_progress<P, F, Fut, G, PlaylistFut, H, PlaylistHashFut>(
     provider: &P,
     import_id: Uuid,
     options: ImportOptions,
     existing_tidal_playlists: &HashMap<String, String>,
     mut report_progress: F,
     mut report_playlist_created: G,
+    mut report_playlist_synced: H,
 ) -> Result<(ImportOutcome, ImportProgress), ImportFailure>
 where
     P: MusicImportProvider,
@@ -1073,6 +1172,8 @@ where
     Fut: Future<Output = ()>,
     G: FnMut(&SpotifyPlaylist, &str) -> PlaylistFut,
     PlaylistFut: Future<Output = ()>,
+    H: FnMut(&SpotifyPlaylist, &str, &[SpotifyTrack]) -> PlaylistHashFut,
+    PlaylistHashFut: Future<Output = ()>,
 {
     let mut outcome = ImportOutcome::default();
     let mut progress = ImportProgress {
@@ -1189,11 +1290,15 @@ where
                 outcome: outcome.clone(),
                 progress: progress.clone(),
             })?;
+    let mut tidal_playlist_hashes = HashMap::new();
 
     // Reconcile TIDAL-owned playlists first. This lets a playlist created or
     // edited in TIDAL arrive in Spotify without the older Spotify snapshot
     // immediately overwriting it later in this run.
     if options.include_owned_playlists {
+        progress.stage = "reconciling_tidal_playlists";
+        progress.activity = "Reconciling existing TIDAL playlists with Spotify".to_string();
+        report_progress(progress.clone()).await;
         for tidal_playlist in &tidal_playlists {
             progress.activity = format!("Reading TIDAL playlist: {}", tidal_playlist.name);
             report_progress(progress.clone()).await;
@@ -1205,6 +1310,10 @@ where
                     outcome: outcome.clone(),
                     progress: progress.clone(),
                 })?;
+            tidal_playlist_hashes.insert(
+                tidal_playlist.id.clone(),
+                playlist_content_hash(&tidal_tracks),
+            );
             let (spotify_track_ids, unmatched) = match_spotify_tracks(
                 provider,
                 &tidal_tracks,
@@ -1298,6 +1407,39 @@ where
             created
         };
 
+        let source_track_hash = playlist_content_hash(&tracks);
+        if tidal_playlist_hashes
+            .get(&tidal_playlist_id)
+            .is_some_and(|hash| hash == &source_track_hash)
+        {
+            progress.activity = format!(
+                "TIDAL playlist already matches Spotify; skipping rewrite: {}",
+                playlist.name
+            );
+            report_progress(progress.clone()).await;
+            for duplicate in tidal_playlists.iter().filter(|candidate| {
+                candidate.id != tidal_playlist_id
+                    && same_playlist_name(&candidate.name, &playlist.name)
+            }) {
+                progress.activity =
+                    format!("Removing duplicate TIDAL playlist: {}", duplicate.name);
+                report_progress(progress.clone()).await;
+                provider
+                    .delete_tidal_playlist(
+                        &duplicate.id,
+                        idempotency_key(import_id, &format!("delete_duplicate:{}", duplicate.id)),
+                    )
+                    .await
+                    .map_err(|message| ImportFailure {
+                        message,
+                        outcome: outcome.clone(),
+                        progress: progress.clone(),
+                    })?;
+            }
+            report_playlist_synced(&playlist, &tidal_playlist_id, &tracks).await;
+            continue;
+        }
+
         progress.stage = "adding_playlist_tracks";
         progress.activity = format!("Matching songs for TIDAL playlist: {}", playlist.name);
         report_progress(progress.clone()).await;
@@ -1354,6 +1496,7 @@ where
                     progress: progress.clone(),
                 })?;
         }
+        report_playlist_synced(&playlist, &tidal_playlist_id, &tracks).await;
     }
 
     progress.stage = "matching_artists";
@@ -2170,6 +2313,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn playlist_hash_uses_track_order_and_exact_isrcs() {
+        let first = vec![track(Some("US-AAA-01")), track(Some("US-BBB-02"))];
+        let reordered = vec![track(Some("US-BBB-02")), track(Some("US-AAA-01"))];
+
+        assert_eq!(playlist_content_hash(&first), playlist_content_hash(&first));
+        assert_ne!(
+            playlist_content_hash(&first),
+            playlist_content_hash(&reordered)
+        );
+    }
+
     #[tokio::test]
     async fn imports_owned_playlists_with_matching_visibility_and_follows_exact_artist_matches() {
         let provider = FakeProvider {
@@ -2211,6 +2366,7 @@ mod tests {
             &HashMap::new(),
             |_| async {},
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap()
@@ -2286,6 +2442,7 @@ mod tests {
                 }
             },
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap();
@@ -2344,6 +2501,7 @@ mod tests {
             &HashMap::new(),
             |_| async {},
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap()
@@ -2392,6 +2550,7 @@ mod tests {
             &HashMap::from([("owned".to_string(), "existing-tidal-playlist".to_string())]),
             |_| async {},
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap();
@@ -2445,6 +2604,7 @@ mod tests {
             &HashMap::new(),
             |_| async {},
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap();
@@ -2517,6 +2677,7 @@ mod tests {
             &HashMap::new(),
             |_| async {},
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap()
@@ -2578,6 +2739,7 @@ mod tests {
             &HashMap::new(),
             |_| async {},
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap()
@@ -2645,6 +2807,7 @@ mod tests {
             &HashMap::new(),
             |_| async {},
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap();
@@ -2708,6 +2871,7 @@ mod tests {
                 }
             },
             |_, _| async {},
+            |_, _, _| async {},
         )
         .await
         .unwrap();

@@ -81,4 +81,14 @@ describe("importStage", () => {
       }),
     ).toBe("Import failed while matching or adding playlist tracks");
   });
+
+  it("distinguishes TIDAL playlist reconciliation from artist matching", () => {
+    expect(
+      importStage({
+        ...failedImport(),
+        status: "running",
+        stage: "reconciling_tidal_playlists",
+      }),
+    ).toBe("Reconciling existing TIDAL playlists with Spotify");
+  });
 });
