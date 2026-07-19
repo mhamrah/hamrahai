@@ -15,6 +15,16 @@ const isActiveImport = (run: MusicImportWire) =>
 const canRestartImport = (run: MusicImportWire) =>
   run.status === "failed" || run.status === "partial";
 
+const formatSyncTime = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Unknown time"
+    : new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(date);
+};
+
 export const failedImportMessage = (run: MusicImportWire) =>
   run.error ??
   "Restart the incomplete import to safely reuse its original TIDAL idempotency keys.";
@@ -246,9 +256,9 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     <section>
       <h2 class="text-xl font-semibold text-gray-950">Music management</h2>
       <p class="mt-2 text-sm leading-6 text-gray-600">
-        Copy Spotify playlist tracks and Liked Songs to TIDAL when their ISRC
-        identifiers match exactly, and follow exact artist-name matches. Public
-        Spotify playlists remain public; all others are unlisted.
+        Syncs owned playlists in both directions and transfers only exact ISRC
+        matches. Liked Songs added in TIDAL are also added to Spotify; removals
+        never delete Spotify music.
       </p>
       {error.value && (
         <p class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
@@ -326,12 +336,12 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
             ).checked;
           }}
         />
-        Also import Spotify Liked Songs
+        Sync Liked Songs
       </label>
       {includeSavedTracks.value && (
         <p class="mt-2 text-sm text-gray-600">
-          Spotify will ask for permission to read your Liked Songs. Reconnect
-          Spotify if requested.
+          TIDAL additions are saved to Spotify when the ISRC matches exactly.
+          Removing music in TIDAL never removes it from Spotify. Reconnect Spotify if asked.
         </p>
       )}
       <button
@@ -359,43 +369,53 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
                 ? "Retry partial import"
                 : "Start import"}
       </button>
-      {imports.value[0] && (
-        <div class="mt-3 rounded-md bg-gray-50 p-3 text-sm text-gray-600">
+      {imports.value.length > 0 && (
+        <section class="mt-6">
+          <h3 class="text-base font-semibold text-gray-950">Sync history</h3>
+          <p class="mt-1 text-sm text-gray-600">
+            Each check records what synced, what could not be matched, and any provider error.
+          </p>
+          <div class="mt-3 space-y-3">
+            {imports.value.map((run) => (
+        <div key={run.id} class="rounded-md bg-gray-50 p-3 text-sm text-gray-600">
+          <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <p class="font-medium text-gray-950">
-            {importStage(imports.value[0])}
+            {importStage(run)}
+          </p>
+          <p class="text-xs text-gray-500">{formatSyncTime(run.created_at)}</p>
+          </div>
+          <p class="mt-1">
+            Selected from Spotify: {run.playlist_total} playlists ·{" "}
+            {run.playlist_track_total} playlist tracks ·{" "}
+            {run.saved_track_total} Liked Songs ·{" "}
+            {run.artist_total} followed artists.
           </p>
           <p class="mt-1">
-            Selected from Spotify: {imports.value[0].playlist_total} playlists ·{" "}
-            {imports.value[0].playlist_track_total} playlist tracks ·{" "}
-            {imports.value[0].saved_track_total} Liked Songs ·{" "}
-            {imports.value[0].artist_total} followed artists.
+            {run.playlists_imported} playlists created ·{" "}
+            {run.playlist_tracks_imported} playlist tracks added ·{" "}
+            {run.saved_tracks_imported} Liked Songs saved ·{" "}
+            {run.artists_followed} artists followed ·{" "}
+            {run.unmatched_items} unmatched
           </p>
-          <p class="mt-1">
-            {imports.value[0].playlists_imported} playlists created ·{" "}
-            {imports.value[0].playlist_tracks_imported} playlist tracks added ·{" "}
-            {imports.value[0].saved_tracks_imported} Liked Songs saved ·{" "}
-            {imports.value[0].artists_followed} artists followed ·{" "}
-            {imports.value[0].unmatched_items} unmatched
-          </p>
-          {canRestartImport(imports.value[0]) && (
+          {canRestartImport(run) && (
             <p class="mt-1">
               Restarting reuses this import's original TIDAL idempotency keys.
             </p>
           )}
-          {imports.value[0].error && (
-            <p class="mt-1 text-red-700">{imports.value[0].error}</p>
+          {run.error && (
+            <p class="mt-1 text-red-700">{run.error}</p>
           )}
-          {imports.value[0].unmatched_items > 0 && (
+          {run.unmatched_items > 0 && (
             <button
               class="mt-3 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800"
-              onClick$={() => loadUnmatchedTracks(imports.value[0].id)}
+              onClick$={() => loadUnmatchedTracks(run.id)}
             >
-              {loadedUnmatchedFor.value === imports.value[0].id
+              {loadedUnmatchedFor.value === run.id
                 ? "Hide unsupported songs"
-                : `Review ${imports.value[0].unmatched_items} unsupported songs`}
+                : `Review ${run.unmatched_items} unsupported songs`}
             </button>
           )}
-          {loadedUnmatchedFor.value === imports.value[0].id && (
+          {loadedUnmatchedFor.value === run.id && (
             <ul class="mt-3 divide-y divide-gray-200 rounded-md border border-gray-200 bg-white">
               {unmatchedTracks.value.map((track) => (
                 <li key={track.id} class="p-3">
@@ -404,7 +424,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
                     {[track.artist_name, track.album_name].filter(Boolean).join(" · ") || "Spotify metadata unavailable"}
                   </p>
                   <p class="mt-1 text-xs text-gray-500">
-                    {track.source_collection} · {track.reason === "missing_isrc" ? "Spotify did not provide an ISRC" : "No exact ISRC match was found in TIDAL"}
+                    {track.source_collection} · {track.reason === "missing_isrc" ? "The service did not provide an ISRC" : track.reason === "not_available_in_spotify" ? "No exact ISRC match was found in Spotify" : "No exact ISRC match was found in TIDAL"}
                   </p>
                 </li>
               ))}
@@ -414,9 +434,12 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
             </ul>
           )}
           <p class="mt-1 text-xs text-gray-500">
-            Import reference: {imports.value[0].id.slice(0, 8)}
+            Import reference: {run.id.slice(0, 8)}
           </p>
         </div>
+            ))}
+          </div>
+        </section>
       )}
     </section>
   );

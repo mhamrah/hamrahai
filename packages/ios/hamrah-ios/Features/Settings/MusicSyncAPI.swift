@@ -113,6 +113,11 @@ struct MusicImportDTO: Codable, Identifiable {
     }
 
     var shortReference: String { String(id.prefix(8)) }
+
+    var createdAtDescription: String {
+        guard let date = ISO8601DateFormatter().date(from: created_at) else { return created_at }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
 }
 
 struct MusicUnmatchedTrackDTO: Codable, Identifiable {
@@ -129,7 +134,8 @@ struct MusicUnmatchedTrackDTO: Codable, Identifiable {
     }
 
     var reasonDescription: String {
-        reason == "missing_isrc" ? "Spotify did not provide an ISRC" : "No exact ISRC match was found in TIDAL"
+        if reason == "missing_isrc" { return "The service did not provide an ISRC" }
+        return reason == "not_available_in_spotify" ? "No exact ISRC match was found in Spotify" : "No exact ISRC match was found in TIDAL"
     }
 }
 

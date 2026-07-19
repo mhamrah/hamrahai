@@ -119,6 +119,13 @@ export default component$(() => {
           </a>
           <nav class="flex items-center gap-2 sm:gap-3">
             <a
+              href="/music"
+              data-testid="music-management"
+              class="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
+            >
+              Music
+            </a>
+            <a
               href="/settings"
               data-testid="account-settings"
               class="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
