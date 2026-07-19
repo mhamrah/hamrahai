@@ -71,6 +71,9 @@ pub(super) struct SpotifyArtist {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SpotifyTrack {
     pub isrc: Option<String>,
+    pub name: String,
+    pub artist_name: Option<String>,
+    pub album_name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +105,14 @@ pub(super) struct ImportOutcome {
     pub imported_items: i32,
     pub unmatched_items: i32,
     pub warning: Option<String>,
+    pub unmatched_tracks: Vec<UnmatchedTrack>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct UnmatchedTrack {
+    pub source_collection: String,
+    pub track: SpotifyTrack,
+    pub reason: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -828,15 +839,16 @@ where
         report_progress(progress.clone()).await;
         for (batch_index, tracks) in tracks.chunks(50).enumerate() {
             let (tidal_track_ids, unmatched) =
-                match_tidal_tracks(provider, tracks)
+                match_tidal_tracks(provider, tracks, format!("Playlist: {}", playlist.name))
                     .await
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
                         progress: progress.clone(),
                     })?;
-            outcome.unmatched_items += unmatched;
-            progress.tracks_unmatched += unmatched;
+            outcome.unmatched_items += unmatched.len() as i32;
+            progress.tracks_unmatched += unmatched.len() as i32;
+            outcome.unmatched_tracks.extend(unmatched);
             progress.tracks_matched += tidal_track_ids.len() as i32;
             if !tidal_track_ids.is_empty() {
                 let result = provider
@@ -919,15 +931,16 @@ where
         report_progress(progress.clone()).await;
         for (batch_index, tracks) in saved_tracks.chunks(50).enumerate() {
             let (tidal_track_ids, unmatched) =
-                match_tidal_tracks(provider, tracks)
+                match_tidal_tracks(provider, tracks, "Liked Songs".to_string())
                     .await
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
                         progress: progress.clone(),
                     })?;
-            outcome.unmatched_items += unmatched;
-            progress.tracks_unmatched += unmatched;
+            outcome.unmatched_items += unmatched.len() as i32;
+            progress.tracks_unmatched += unmatched.len() as i32;
+            outcome.unmatched_tracks.extend(unmatched);
             progress.tracks_matched += tidal_track_ids.len() as i32;
             if !tidal_track_ids.is_empty() {
                 let result = provider
@@ -959,7 +972,8 @@ fn is_inaccessible_spotify_playlist_error(message: &str) -> bool {
 async fn match_tidal_tracks<P>(
     provider: &P,
     tracks: &[SpotifyTrack],
-) -> Result<(Vec<String>, i32), String>
+    source_collection: String,
+) -> Result<(Vec<String>, Vec<UnmatchedTrack>), String>
 where
     P: MusicImportProvider,
 {
@@ -977,7 +991,25 @@ where
         .filter_map(|isrc| tidal_tracks.get(isrc))
         .cloned()
         .collect::<Vec<_>>();
-    let unmatched = tracks.len() as i32 - tidal_track_ids.len() as i32;
+    let unmatched = tracks
+        .iter()
+        .filter(|track| {
+            track
+                .isrc
+                .as_ref()
+                .is_none_or(|isrc| !tidal_tracks.contains_key(isrc))
+        })
+        .cloned()
+        .map(|track| UnmatchedTrack {
+            reason: if track.isrc.is_some() {
+                "not_available_in_tidal"
+            } else {
+                "missing_isrc"
+            },
+            source_collection: source_collection.clone(),
+            track,
+        })
+        .collect();
     Ok((tidal_track_ids, unmatched))
 }
 
@@ -1053,6 +1085,15 @@ struct SpotifyTrackWire {
     #[serde(default)]
     is_local: bool,
     external_ids: Option<SpotifyExternalIds>,
+    name: String,
+    #[serde(default)]
+    artists: Vec<SpotifyArtistWire>,
+    album: Option<SpotifyAlbumWire>,
+}
+
+#[derive(Deserialize)]
+struct SpotifyAlbumWire {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -1078,6 +1119,9 @@ fn spotify_track(track: SpotifyTrackWire) -> Option<SpotifyTrack> {
                 .external_ids
                 .and_then(|ids| ids.isrc)
                 .map(|isrc| normalize_isrc(&isrc)),
+            name: track.name,
+            artist_name: track.artists.first().map(|artist| artist.name.clone()),
+            album_name: track.album.map(|album| album.name),
         },
     )
 }
@@ -1310,6 +1354,9 @@ mod tests {
     fn track(isrc: Option<&str>) -> SpotifyTrack {
         SpotifyTrack {
             isrc: isrc.map(str::to_string),
+            name: "Track".to_string(),
+            artist_name: Some("Artist".to_string()),
+            album_name: Some("Album".to_string()),
         }
     }
 
@@ -1454,6 +1501,13 @@ mod tests {
         assert_eq!(outcome.total_items, 5);
         assert_eq!(outcome.imported_items, 3);
         assert_eq!(outcome.unmatched_items, 2);
+        assert_eq!(outcome.unmatched_tracks.len(), 2);
+        assert_eq!(outcome.unmatched_tracks[0].reason, "not_available_in_tidal");
+        assert_eq!(outcome.unmatched_tracks[1].reason, "missing_isrc");
+        assert_eq!(
+            outcome.unmatched_tracks[0].source_collection,
+            "Playlist: owned"
+        );
         assert_eq!(progress.playlist_tracks_imported, 1);
         assert_eq!(progress.saved_tracks_imported, 1);
         assert_eq!(progress.tracks_matched, 2);

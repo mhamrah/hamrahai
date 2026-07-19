@@ -115,6 +115,24 @@ struct MusicImportDTO: Codable, Identifiable {
     var shortReference: String { String(id.prefix(8)) }
 }
 
+struct MusicUnmatchedTrackDTO: Codable, Identifiable {
+    let id: String
+    let source_collection: String
+    let track_name: String
+    let artist_name: String?
+    let album_name: String?
+    let isrc: String?
+    let reason: String
+
+    var detail: String {
+        [artist_name, album_name].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    var reasonDescription: String {
+        reason == "missing_isrc" ? "Spotify did not provide an ISRC" : "No exact ISRC match was found in TIDAL"
+    }
+}
+
 struct MusicAuthorizationDTO: Codable { let authorization_url: String }
 
 struct MusicSyncAPI {
@@ -176,5 +194,9 @@ struct MusicSyncAPI {
 
     func imports() async throws -> [MusicImportDTO] {
         try await client.get("/v1/music/imports", auth: .required, responseType: [MusicImportDTO].self)
+    }
+
+    func unmatchedTracks(importID: String) async throws -> [MusicUnmatchedTrackDTO] {
+        try await client.get("/v1/music/imports/\(importID)/unmatched-tracks", auth: .required, responseType: [MusicUnmatchedTrackDTO].self)
     }
 }

@@ -2,6 +2,7 @@ import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import type {
   MusicConnectionWire,
   MusicImportWire,
+  MusicUnmatchedTrackWire,
   MusicProvider,
 } from "@hamrah/shared";
 import { createApiClient } from "~/lib/auth/api-client";
@@ -105,7 +106,7 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
       const client = createApiClient();
       const result = await client.post<{ authorization_url: string }>(
         `/v1/music/connections/${provider}/authorize`,
-        { redirect_path: "/settings" },
+        { redirect_path: "/music" },
       );
       window.location.assign(result.authorization_url);
     } catch (cause) {
@@ -221,10 +222,29 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
       (connection) =>
         connection.provider === provider && connection.status === "connected",
     )?.provider_account_name;
+  const unmatchedTracks = useSignal<MusicUnmatchedTrackWire[]>([]);
+  const loadedUnmatchedFor = useSignal<string | undefined>();
+
+  const loadUnmatchedTracks = $(async (importId: string) => {
+    if (loadedUnmatchedFor.value === importId) {
+      loadedUnmatchedFor.value = undefined;
+      unmatchedTracks.value = [];
+      return;
+    }
+    error.value = undefined;
+    try {
+      unmatchedTracks.value = await createApiClient().get<MusicUnmatchedTrackWire[]>(
+        `/v1/music/imports/${importId}/unmatched-tracks`,
+      );
+      loadedUnmatchedFor.value = importId;
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : "Unable to load unmatched songs.";
+    }
+  });
 
   return (
-    <section class="mt-6 border-t border-gray-200 pt-6">
-      <h2 class="text-xl font-semibold text-gray-950">Music import</h2>
+    <section>
+      <h2 class="text-xl font-semibold text-gray-950">Music management</h2>
       <p class="mt-2 text-sm leading-6 text-gray-600">
         Copy Spotify playlist tracks and Liked Songs to TIDAL when their ISRC
         identifiers match exactly, and follow exact artist-name matches. Public
@@ -364,6 +384,34 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
           )}
           {imports.value[0].error && (
             <p class="mt-1 text-red-700">{imports.value[0].error}</p>
+          )}
+          {imports.value[0].unmatched_items > 0 && (
+            <button
+              class="mt-3 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800"
+              onClick$={() => loadUnmatchedTracks(imports.value[0].id)}
+            >
+              {loadedUnmatchedFor.value === imports.value[0].id
+                ? "Hide unsupported songs"
+                : `Review ${imports.value[0].unmatched_items} unsupported songs`}
+            </button>
+          )}
+          {loadedUnmatchedFor.value === imports.value[0].id && (
+            <ul class="mt-3 divide-y divide-gray-200 rounded-md border border-gray-200 bg-white">
+              {unmatchedTracks.value.map((track) => (
+                <li key={track.id} class="p-3">
+                  <p class="font-medium text-gray-950">{track.track_name}</p>
+                  <p class="text-sm text-gray-600">
+                    {[track.artist_name, track.album_name].filter(Boolean).join(" · ") || "Spotify metadata unavailable"}
+                  </p>
+                  <p class="mt-1 text-xs text-gray-500">
+                    {track.source_collection} · {track.reason === "missing_isrc" ? "Spotify did not provide an ISRC" : "No exact ISRC match was found in TIDAL"}
+                  </p>
+                </li>
+              ))}
+              {unmatchedTracks.value.length === 0 && (
+                <li class="p-3 text-sm text-gray-600">This import predates detailed tracking, so individual songs are unavailable.</li>
+              )}
+            </ul>
           )}
           <p class="mt-1 text-xs text-gray-500">
             Import reference: {imports.value[0].id.slice(0, 8)}

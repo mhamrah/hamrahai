@@ -252,6 +252,12 @@ private struct InnerOptimizedInboxView: View {
                 }
 
                 NavigationLink {
+                    MusicManagementView()
+                } label: {
+                    Label("Music", systemImage: "music.note.list")
+                }
+
+                NavigationLink {
                     SettingsView()
                         .environmentObject(authManager)
                         .environmentObject(biometricManager)
@@ -275,6 +281,12 @@ private struct InnerOptimizedInboxView: View {
                     showingFilterSheet = true
                 } label: {
                     Label("Filters", systemImage: "slider.horizontal.3")
+                }
+
+                NavigationLink {
+                    MusicManagementView()
+                } label: {
+                    Label("Music", systemImage: "music.note.list")
                 }
 
                 NavigationLink {

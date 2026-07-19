@@ -265,6 +265,14 @@ async fn list_music_imports_wrapper(
     music::list_imports(axum::extract::State(pool), headers).await
 }
 
+async fn list_music_unmatched_tracks_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    path: axum::extract::Path<uuid::Uuid>,
+) -> Response {
+    music::list_unmatched_tracks(axum::extract::State(pool), headers, path).await
+}
+
 pub fn create_router(pool: DbPool) -> Router {
     // Initialize WebAuthn config
     let rp_id = std::env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".to_string());
@@ -382,6 +390,10 @@ pub fn create_router(pool: DbPool) -> Router {
         .route(
             "/v1/music/imports/{id}/restart",
             post(restart_music_import_wrapper),
+        )
+        .route(
+            "/v1/music/imports/{id}/unmatched-tracks",
+            get(list_music_unmatched_tracks_wrapper),
         )
         .route("/v1/tags", get(list_tags_wrapper))
         .route(
