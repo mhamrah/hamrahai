@@ -722,16 +722,14 @@ impl MusicImportProvider for HttpMusicImportProvider {
                     query_value(&format!("isrc:{isrc}"))
                 ))
                 .await?;
-            if let Some(track) = result.tracks.items.into_iter().next() {
-                if let Some(track_isrc) = track
+            if let Some(track) = result.tracks.items.into_iter().next()
+                && let Some(track_isrc) = track
                     .external_ids
                     .and_then(|ids| ids.isrc)
                     .map(|value| normalize_isrc(&value))
-                {
-                    if track_isrc == *isrc {
-                        matches.insert(isrc.clone(), track.id);
-                    }
-                }
+                && track_isrc == *isrc
+            {
+                matches.insert(isrc.clone(), track.id);
             }
         }
         Ok(matches)
