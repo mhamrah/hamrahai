@@ -8,7 +8,8 @@ The API is deployed to Google Cloud Run through Cloud Deploy.
 - **Region**: `us-central1`
 - **Service**: `hamrah-api`
 - **URL**: https://hamrah-api-a7tefmgk7q-uc.a.run.app
-- **Billing mode**: Request-based billing (`cpu-throttling: true`)
+- **Billing mode**: Instance-based billing (`cpu-throttling: false`)
+- **Request timeout**: 30 minutes, with a 28-minute application worker budget
 
 ## Declarative delivery configuration
 
@@ -43,7 +44,7 @@ checked-in manifest.
 Create the runtime secrets:
 
 ```bash
-for SECRET_NAME in DATABASE_URL JWT_SECRET SPOTIFY_CLIENT_SECRET MUSIC_TOKEN_ENCRYPTION_KEY; do
+for SECRET_NAME in DATABASE_URL JWT_SECRET SPOTIFY_CLIENT_SECRET MUSIC_TOKEN_ENCRYPTION_KEY MUSIC_IMPORT_TASK_SECRET; do
   gcloud secrets create "$SECRET_NAME" \
     --project=hamrah-ai \
     --replication-policy=automatic
@@ -61,6 +62,8 @@ printf '%s' 'spotify-client-secret' | \
   gcloud secrets versions add SPOTIFY_CLIENT_SECRET --data-file=-
 printf '%s' '32-byte-base64url-encryption-key' | \
   gcloud secrets versions add MUSIC_TOKEN_ENCRYPTION_KEY --data-file=-
+openssl rand -base64 48 | tr -d '\n' | \
+  gcloud secrets versions add MUSIC_IMPORT_TASK_SECRET --data-file=-
 ```
 
 The Cloud Run service identity must access every secret:
@@ -69,7 +72,7 @@ The Cloud Run service identity must access every secret:
 PROJECT_NUMBER=66020219411
 RUNTIME_SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-for SECRET_NAME in DATABASE_URL JWT_SECRET SPOTIFY_CLIENT_SECRET MUSIC_TOKEN_ENCRYPTION_KEY; do
+for SECRET_NAME in DATABASE_URL JWT_SECRET SPOTIFY_CLIENT_SECRET MUSIC_TOKEN_ENCRYPTION_KEY MUSIC_IMPORT_TASK_SECRET; do
   gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
     --project=hamrah-ai \
     --member="serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" \
@@ -92,6 +95,7 @@ The API alone communicates with music providers.
 | `TIDAL_CLIENT_ID`            | GitHub repository variable passed as a Cloud Deploy release parameter |
 | `TIDAL_REDIRECT_URI`         | `https://api.hamrah.app/v1/music/connections/tidal/callback`          |
 | `MUSIC_TOKEN_ENCRYPTION_KEY` | Secret Manager reference used to encrypt provider tokens at rest      |
+| `MUSIC_IMPORT_TASK_SECRET`   | Secret Manager reference used to authenticate worker task requests     |
 | `WEB_APP_URL`                | `https://hamrah.app`                                                  |
 
 Register both callback URLs exactly with their providers. Spotify development
@@ -99,6 +103,51 @@ mode users must be allowlisted. Run the first live TIDAL import against a test
 account after enabling `playlists.write`, `collection.write`, `search.read`, and
 `user.read`. Existing TIDAL connections must reconnect after new scopes deploy.
 See [MUSIC_IMPORT.md](MUSIC_IMPORT.md) for the full import contract.
+
+### Cloud Tasks queue
+
+Music reconciliation runs on the `music-imports` queue in `us-central1`. Queue
+dispatch is serialized because both provider accounts are user-scoped. The
+retry window must outlive the worker's three-minute heartbeat lease and allow a
+live 28-minute request to reject overlapping delivery attempts without
+exhausting the original task.
+
+Bootstrap or reconcile the queue:
+
+```bash
+gcloud tasks queues describe music-imports \
+  --project=hamrah-ai \
+  --location=us-central1 >/dev/null 2>&1 || \
+gcloud tasks queues create music-imports \
+  --project=hamrah-ai \
+  --location=us-central1
+
+gcloud tasks queues update music-imports \
+  --project=hamrah-ai \
+  --location=us-central1 \
+  --max-concurrent-dispatches=1 \
+  --max-dispatches-per-second=10 \
+  --max-attempts=100 \
+  --max-retry-duration=86400s \
+  --min-backoff=10s \
+  --max-backoff=300s \
+  --max-doublings=3
+```
+
+The Cloud Run runtime service account needs `roles/cloudtasks.enqueuer` on the
+project because a worker schedules successor tasks for long provider backoffs
+and execution-budget checkpoints:
+
+```bash
+gcloud projects add-iam-policy-binding hamrah-ai \
+  --member="serviceAccount:66020219411-compute@developer.gserviceaccount.com" \
+  --role="roles/cloudtasks.enqueuer"
+```
+
+The same service account is the task OIDC identity and must retain Cloud Run
+invoker permission if IAM invocation checks are enabled. Worker requests also
+carry `MUSIC_IMPORT_TASK_SECRET`; OIDC is not a replacement for that
+application-level check.
 
 ## Authentication runtime configuration
 

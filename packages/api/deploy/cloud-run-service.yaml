@@ -16,6 +16,7 @@ spec:
         autoscaling.knative.dev/maxScale: "1"
         run.googleapis.com/cpu-throttling: "false"
     spec:
+      timeoutSeconds: 1800
       containers:
         - image: hamrah-api
           ports:

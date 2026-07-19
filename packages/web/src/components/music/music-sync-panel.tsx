@@ -302,10 +302,10 @@ export const MusicSyncPanel = component$((props: MusicSyncPanelProps) => {
     <section>
       <h2 class="text-xl font-semibold text-gray-950">Music management</h2>
       <p class="mt-2 text-sm leading-6 text-gray-600">
-        Syncs owned playlists in both directions and transfers only exact ISRC
-        matches. For each Spotify playlist, duplicate TIDAL playlists with the
-        same name are consolidated into one copy. Liked Songs added in TIDAL are
-        also added to Spotify; removals never delete Spotify music.
+        Syncs owned playlists in both directions using exact ISRC matches.
+        Same-name TIDAL playlists are merged into one complete copy before the
+        extras are removed. Provider rate limits pause and resume automatically;
+        removing music from either provider never removes it from the other.
       </p>
       {error.value && (
         <p class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
