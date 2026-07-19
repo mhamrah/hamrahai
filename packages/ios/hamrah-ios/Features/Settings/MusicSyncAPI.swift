@@ -113,6 +113,11 @@ struct MusicImportDTO: Codable, Identifiable {
     }
 
     var shortReference: String { String(id.prefix(8)) }
+
+    var createdAtDescription: String {
+        guard let date = ISO8601DateFormatter().date(from: created_at) else { return created_at }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
 }
 
 struct MusicUnmatchedTrackDTO: Codable, Identifiable {

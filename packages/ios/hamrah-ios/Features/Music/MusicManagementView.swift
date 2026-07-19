@@ -6,7 +6,7 @@ struct MusicManagementView: View {
     @State private var connections: [MusicConnectionDTO] = []
     @State private var imports: [MusicImportDTO] = []
     @State private var unmatched: [MusicUnmatchedTrackDTO] = []
-    @State private var showingUnmatched = false
+    @State private var showingUnmatchedFor: String?
     @State private var includeSavedPlaylists = false
     @State private var includeSavedTracks = false
     @State private var isLoading = false
@@ -45,7 +45,13 @@ struct MusicManagementView: View {
                 Button(actionTitle) { Task { await startOrRestart() } }
                     .disabled(isLoading || latest?.isActive == true || !ready)
             }
-            if let latest { resultSection(latest) }
+            if !imports.isEmpty {
+                Section("Sync history") {
+                    ForEach(imports) { run in
+                        resultSection(run)
+                    }
+                }
+            }
         }
         .navigationTitle("Music")
         .task { await refresh() }
@@ -56,12 +62,16 @@ struct MusicManagementView: View {
     }
 
     @ViewBuilder private func resultSection(_ run: MusicImportDTO) -> some View {
-        Section("Latest check") {
-            Text(run.stageDescription).font(.footnote.weight(.medium))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(run.stageDescription).font(.footnote.weight(.medium))
+                Spacer()
+                Text(run.createdAtDescription).font(.caption2).foregroundStyle(.secondary)
+            }
             Text(run.resultSummary).font(.footnote).foregroundStyle(.secondary)
             if run.unmatched_items > 0 {
-                Button(showingUnmatched ? "Hide unsupported songs" : "Review \(run.unmatched_items) unsupported songs") { Task { await loadUnmatched(run.id) } }
-                if showingUnmatched {
+                Button(showingUnmatchedFor == run.id ? "Hide unsupported songs" : "Review \(run.unmatched_items) unsupported songs") { Task { await loadUnmatched(run.id) } }
+                if showingUnmatchedFor == run.id {
                     ForEach(unmatched) { track in
                         VStack(alignment: .leading) {
                             Text(track.track_name).fontWeight(.medium)
@@ -80,5 +90,5 @@ struct MusicManagementView: View {
     private func connect(_ provider: String) async { do { openURL(try await api.beginConnection(provider: provider)) } catch { self.error = error.localizedDescription } }
     private func disconnect(_ provider: String) async { do { try await api.disconnectConnection(provider: provider); await refresh() } catch { self.error = error.localizedDescription } }
     private func startOrRestart() async { isLoading = true; defer { isLoading = false }; do { let run = if let latest, latest.canRestart { try await api.restartImport(id: latest.id, includeSavedPlaylists: includeSavedPlaylists, includeSavedTracks: includeSavedTracks) } else { try await api.startImport(includeSavedPlaylists: includeSavedPlaylists, includeSavedTracks: includeSavedTracks) }; imports = [run] + imports.filter { $0.id != run.id } } catch { self.error = error.localizedDescription; await refresh(silent: true) } }
-    private func loadUnmatched(_ id: String) async { if showingUnmatched { showingUnmatched = false; return }; do { unmatched = try await api.unmatchedTracks(importID: id); showingUnmatched = true } catch { self.error = error.localizedDescription } }
+    private func loadUnmatched(_ id: String) async { if showingUnmatchedFor == id { showingUnmatchedFor = nil; return }; do { unmatched = try await api.unmatchedTracks(importID: id); showingUnmatchedFor = id } catch { self.error = error.localizedDescription } }
 }
