@@ -27,6 +27,8 @@ TIDAL.
 - Cross-provider song matches require an exact normalized ISRC. Missing or
   unavailable ISRCs are reported as unmatched; title/artist heuristics are not
   used.
+- A TIDAL track write reported as `ALREADY_PRESENT` is a reconciled no-op, not
+  an unmatched song. Other skipped TIDAL writes remain unmatched.
 - Duplicate TIDAL content is copied directly by TIDAL track ID before a
   playlist is deleted. If TIDAL skips any of those writes, the run fails safely
   and keeps the duplicate playlists.

@@ -413,6 +413,79 @@ async fn http_music_import_create_records_the_required_provider_pair() -> anyhow
 }
 
 #[tokio::test]
+async fn music_import_unmatched_backfill_uses_persisted_match_failures() -> anyhow::Result<()> {
+    let Some((pool, _router)) = setup_router().await? else {
+        return Ok(());
+    };
+
+    let user_email = format!("music-unmatched-backfill-{}@example.com", Uuid::new_v4());
+    let user = upsert_user(&pool, &user_email, Some("Music Backfill Test")).await?;
+    let partially_matched_import_id = Uuid::new_v4();
+    let fully_reconciled_import_id = Uuid::new_v4();
+    let legacy_import_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO music_import_runs \
+         (id,user_id,source_provider,target_provider,status,unmatched_items,completed_at) \
+         VALUES \
+         ($1,$3,'spotify','tidal','partial',1544,NOW()), \
+         ($2,$3,'spotify','tidal','partial',1493,NOW())",
+    )
+    .bind(partially_matched_import_id)
+    .bind(fully_reconciled_import_id)
+    .bind(user.id)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO music_import_runs \
+         (id,user_id,source_provider,target_provider,status,unmatched_items,created_at,completed_at) \
+         SELECT $1,$2,'spotify','tidal','partial',1544,installed_on - INTERVAL '1 second',NOW() \
+         FROM _sqlx_migrations \
+         WHERE version = 20260718020000 AND success",
+    )
+    .bind(legacy_import_id)
+    .bind(user.id)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO music_import_unmatched_tracks \
+         (id,import_id,source_collection,track_name,isrc,reason) \
+         VALUES ($1,$2,'Liked Songs','Unavailable Track','TEST00000001','not_available_in_tidal')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(partially_matched_import_id)
+    .execute(&pool)
+    .await?;
+
+    sqlx::raw_sql(include_str!(
+        "../migrations/20260719040000_music_import_unmatched_accounting.sql"
+    ))
+    .execute(&pool)
+    .await?;
+
+    let partially_matched: (String, i32) =
+        sqlx::query_as("SELECT status, unmatched_items FROM music_import_runs WHERE id = $1")
+            .bind(partially_matched_import_id)
+            .fetch_one(&pool)
+            .await?;
+    let fully_reconciled: (String, i32) =
+        sqlx::query_as("SELECT status, unmatched_items FROM music_import_runs WHERE id = $1")
+            .bind(fully_reconciled_import_id)
+            .fetch_one(&pool)
+            .await?;
+    let legacy: (String, i32) =
+        sqlx::query_as("SELECT status, unmatched_items FROM music_import_runs WHERE id = $1")
+            .bind(legacy_import_id)
+            .fetch_one(&pool)
+            .await?;
+
+    assert_eq!(partially_matched, ("partial".to_string(), 1));
+    assert_eq!(fully_reconciled, ("completed".to_string(), 0));
+    assert_eq!(legacy, ("partial".to_string(), 1544));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_music_import_list_marks_stalled_run_restartable() -> anyhow::Result<()> {
     let Some((pool, router)) = setup_router().await? else {
         return Ok(());
