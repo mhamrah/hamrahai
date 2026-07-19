@@ -40,6 +40,8 @@ export const importStage = (run: MusicImportWire) => {
         return "Import failed while reading Spotify";
       case "creating_playlists":
         return "Import failed while creating TIDAL playlists";
+      case "reconciling_tidal_playlists":
+        return "Import failed while reconciling existing TIDAL playlists";
       case "adding_playlist_tracks":
         return "Import failed while matching or adding playlist tracks";
       case "matching_artists":
@@ -61,6 +63,8 @@ export const importStage = (run: MusicImportWire) => {
       return `Creating TIDAL playlists: ${run.playlists_imported} of ${run.playlist_total}`;
     case "adding_playlist_tracks":
       return `Adding playlist tracks: ${run.playlist_tracks_imported} of ${run.playlist_track_total}`;
+    case "reconciling_tidal_playlists":
+      return "Reconciling existing TIDAL playlists with Spotify";
     case "matching_artists":
       return `Checking artists for exact TIDAL matches: ${run.artists_checked} of ${run.artist_total}`;
     case "following_artists":

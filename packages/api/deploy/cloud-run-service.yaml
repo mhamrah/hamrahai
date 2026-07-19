@@ -41,6 +41,21 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           env:
+            - name: GOOGLE_CLOUD_PROJECT
+              value: hamrah-ai
+            - name: GOOGLE_CLOUD_REGION
+              value: us-central1
+            - name: MUSIC_IMPORT_TASK_QUEUE
+              value: music-imports
+            - name: MUSIC_IMPORT_TASK_BASE_URL
+              value: https://hamrah-api-a7tefmgk7q-uc.a.run.app/internal/music-imports
+            - name: MUSIC_IMPORT_TASK_SERVICE_ACCOUNT
+              value: 66020219411-compute@developer.gserviceaccount.com
+            - name: MUSIC_IMPORT_TASK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: MUSIC_IMPORT_TASK_SECRET
+                  key: latest
             - name: RUST_LOG
               value: info
             - name: APPLE_TEAM_ID

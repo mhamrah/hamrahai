@@ -222,6 +222,7 @@ export interface MusicImportWire {
     | "reading_spotify"
     | "creating_playlists"
     | "adding_playlist_tracks"
+    | "reconciling_tidal_playlists"
     | "matching_artists"
     | "following_artists"
     | "saving_liked_tracks"

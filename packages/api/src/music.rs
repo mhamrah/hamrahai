@@ -8,7 +8,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -84,6 +87,41 @@ struct StoredMusicImport {
     include_saved_playlists: bool,
     include_followed_artists: bool,
     include_saved_tracks: bool,
+}
+
+#[derive(Deserialize)]
+struct GoogleMetadataTokenResponse {
+    access_token: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudTaskRequest {
+    task: CloudTask,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudTask {
+    http_request: CloudTaskHttpRequest,
+    dispatch_deadline: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudTaskHttpRequest {
+    http_method: String,
+    url: String,
+    headers: std::collections::HashMap<String, String>,
+    body: String,
+    oidc_token: CloudTaskOidcToken,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudTaskOidcToken {
+    service_account_email: String,
+    audience: String,
 }
 
 #[derive(Serialize)]
@@ -732,6 +770,7 @@ fn public_import_failure_message(failure: &import::ImportFailure, import_id: Uui
         match failure.progress.stage {
             "reading_spotify" => "Spotify could not read the selected music. No changes were made in TIDAL. Reconnect Spotify, then restart this import.".to_string(),
             "creating_playlists" => "TIDAL could not create the destination playlist after Spotify was read successfully. Restart to retry safely; reconnect TIDAL only if this repeats.".to_string(),
+            "reconciling_tidal_playlists" => "TIDAL could not finish reading an existing playlist for reconciliation. Restart to retry safely; reconnect TIDAL only if this repeats.".to_string(),
             "adding_playlist_tracks" if failure.message.contains("400 Bad Request") => format!(
                 "TIDAL rejected Hamrah's track-matching request while adding playlist songs. Spotify was read successfully and {} TIDAL {} already created. Restart to retry safely; reconnecting Spotify will not help.",
                 failure.progress.playlists_imported,
@@ -796,8 +835,11 @@ async fn run_import(
                 outcome: import::ImportOutcome::default(),
                 progress: initial_progress.clone(),
             })?;
-        let provider =
-            import::HttpMusicImportProvider::new(spotify_access_token, tidal_access_token);
+        let provider = import::HttpMusicImportProvider::new(
+            spotify_access_token,
+            tidal_access_token,
+            pool.clone(),
+        );
         import::execute_import_with_progress(
             &provider,
             import_id,
@@ -814,6 +856,25 @@ async fn run_import(
                 async move {
                     if let Err(err) = persist_import_playlist(&pool, import_id, &spotify_playlist_id, &tidal_playlist_id).await {
                         tracing::error!(%err, %import_id, %spotify_playlist_id, "persist created TIDAL playlist");
+                    }
+                }
+            },
+            |playlist, tidal_playlist_id, tracks| {
+                let pool = pool.clone();
+                let spotify_playlist_id = playlist.id.clone();
+                let tidal_playlist_id = tidal_playlist_id.to_string();
+                let content_hash = import::playlist_content_hash(tracks);
+                async move {
+                    if let Err(err) = persist_playlist_hash(
+                        &pool,
+                        user_id,
+                        &spotify_playlist_id,
+                        &tidal_playlist_id,
+                        &content_hash,
+                    )
+                    .await
+                    {
+                        tracing::error!(%err, %import_id, %spotify_playlist_id, "persist music playlist hash");
                     }
                 }
             },
@@ -892,10 +953,104 @@ async fn import_response(
         .await
 }
 
-fn launch_import(pool: DbPool, user_id: Uuid, import_id: Uuid, options: import::ImportOptions) {
+fn launch_import_locally(
+    pool: DbPool,
+    user_id: Uuid,
+    import_id: Uuid,
+    options: import::ImportOptions,
+) {
     tokio::spawn(async move {
         let _ = run_import(&pool, user_id, import_id, options).await;
     });
+}
+
+async fn cloud_tasks_access_token() -> Result<String, String> {
+    let response = reqwest::Client::new()
+        .get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
+        .header("Metadata-Flavor", "Google")
+        .send()
+        .await
+        .map_err(|error| format!("could not authenticate to Cloud Tasks: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Cloud Tasks authentication returned {}",
+            response.status()
+        ));
+    }
+    response
+        .json::<GoogleMetadataTokenResponse>()
+        .await
+        .map(|token| token.access_token)
+        .map_err(|error| format!("could not read Cloud Tasks credentials: {error}"))
+}
+
+async fn enqueue_import_task(import_id: Uuid) -> Result<(), String> {
+    let project = env("GOOGLE_CLOUD_PROJECT")?;
+    let region = env("GOOGLE_CLOUD_REGION")?;
+    let queue = env("MUSIC_IMPORT_TASK_QUEUE")?;
+    let task_url = format!(
+        "{}/{}{}",
+        env("MUSIC_IMPORT_TASK_BASE_URL")?.trim_end_matches('/'),
+        import_id,
+        "/execute"
+    );
+    let task_secret = env("MUSIC_IMPORT_TASK_SECRET")?;
+    let task_service_account = env("MUSIC_IMPORT_TASK_SERVICE_ACCOUNT")?;
+    let token = cloud_tasks_access_token().await?;
+    let body = STANDARD.encode(serde_json::json!({ "import_id": import_id }).to_string());
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("content-type".to_string(), "application/json".to_string());
+    headers.insert("x-hamrah-import-task-secret".to_string(), task_secret);
+    let request = CloudTaskRequest {
+        task: CloudTask {
+            http_request: CloudTaskHttpRequest {
+                http_method: "POST".to_string(),
+                url: task_url.clone(),
+                headers,
+                body,
+                oidc_token: CloudTaskOidcToken {
+                    service_account_email: task_service_account,
+                    audience: task_url,
+                },
+            },
+            dispatch_deadline: "1800s".to_string(),
+        },
+    };
+    let response = reqwest::Client::new()
+        .post(format!("https://cloudtasks.googleapis.com/v2/projects/{project}/locations/{region}/queues/{queue}/tasks"))
+        .bearer_auth(token)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|error| format!("could not enqueue music import: {error}"))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Cloud Tasks returned {} while queueing music import",
+            response.status()
+        ))
+    }
+}
+
+async fn queue_or_run_import(
+    pool: &DbPool,
+    user_id: Uuid,
+    import_id: Uuid,
+    options: import::ImportOptions,
+) -> Result<(), String> {
+    if std::env::var_os("K_SERVICE").is_none() {
+        sqlx::query(
+            "UPDATE music_import_runs SET status = 'running' WHERE id = $1 AND status = 'queued'",
+        )
+        .bind(import_id)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        launch_import_locally(pool.clone(), user_id, import_id, options);
+        return Ok(());
+    }
+    enqueue_import_task(import_id).await
 }
 
 async fn load_import_playlists(
@@ -915,6 +1070,23 @@ async fn persist_import_playlist(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO music_import_playlists (import_id,spotify_playlist_id,tidal_playlist_id) VALUES ($1,$2,$3) ON CONFLICT (import_id,spotify_playlist_id) DO NOTHING")
         .bind(import_id).bind(spotify_playlist_id).bind(tidal_playlist_id).execute(pool).await?;
+    Ok(())
+}
+
+async fn persist_playlist_hash(
+    pool: &DbPool,
+    user_id: Uuid,
+    spotify_playlist_id: &str,
+    tidal_playlist_id: &str,
+    content_hash: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO music_playlist_sync_hashes (user_id,spotify_playlist_id,tidal_playlist_id,source_track_hash) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id,spotify_playlist_id) DO UPDATE SET tidal_playlist_id = EXCLUDED.tidal_playlist_id, source_track_hash = EXCLUDED.source_track_hash, updated_at = NOW()")
+        .bind(user_id)
+        .bind(spotify_playlist_id)
+        .bind(tidal_playlist_id)
+        .bind(content_hash)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -994,7 +1166,7 @@ pub async fn create_import(
         );
     }
     let id = Uuid::new_v4();
-    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,status,stage,activity,started_at) VALUES ($1,$2,'spotify','tidal',$3,$4,$5,$6,'running','preparing','Queued; secure import worker starting',NOW())")
+    if let Err(err) = sqlx::query("INSERT INTO music_import_runs (id,user_id,source_provider,target_provider,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,status,stage,activity,started_at) VALUES ($1,$2,'spotify','tidal',$3,$4,$5,$6,'queued','queued','Queued for secure background import',NOW())")
         .bind(id).bind(claims.sub).bind(request.include_owned_playlists).bind(request.include_saved_playlists).bind(request.include_followed_artists).bind(request.include_saved_tracks).execute(&pool).await {
         tracing::error!(%err, "create music import");
         return if err.as_database_error().is_some_and(|database_error| database_error.is_unique_violation()) {
@@ -1009,7 +1181,18 @@ pub async fn create_import(
         include_followed_artists: request.include_followed_artists,
         include_saved_tracks: request.include_saved_tracks,
     };
-    launch_import(pool.clone(), claims.sub, id, options);
+    if let Err(message) = queue_or_run_import(&pool, claims.sub, id, options).await {
+        tracing::error!(%message, %id, "queue music import");
+        let _ = sqlx::query("UPDATE music_import_runs SET status = 'failed', stage = 'failed', activity = 'Could not queue the background import', error = $1, completed_at = NOW() WHERE id = $2 AND status = 'queued'")
+            .bind(&message)
+            .bind(id)
+            .execute(&pool)
+            .await;
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "could not queue music import",
+        );
+    }
     match import_response(&pool, id).await {
         Ok(row) => (StatusCode::ACCEPTED, Json(row)).into_response(),
         Err(err) => {
@@ -1056,7 +1239,7 @@ pub async fn restart_import(
         }
     }
     let requested_options = request.map(|Json(value)| value);
-    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET include_owned_playlists = COALESCE($3, include_owned_playlists), include_saved_playlists = COALESCE($4, include_saved_playlists), include_followed_artists = COALESCE($5, include_followed_artists), include_saved_tracks = COALESCE($6, include_saved_tracks), status = 'running', stage = 'preparing', activity = 'Queued; secure import worker starting', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
+    let import = match sqlx::query_as::<_, StoredMusicImport>("UPDATE music_import_runs SET include_owned_playlists = COALESCE($3, include_owned_playlists), include_saved_playlists = COALESCE($4, include_saved_playlists), include_followed_artists = COALESCE($5, include_followed_artists), include_saved_tracks = COALESCE($6, include_saved_tracks), status = 'queued', stage = 'queued', activity = 'Queued for secure background import', total_items = 0, imported_items = 0, unmatched_items = 0, playlist_total = 0, playlists_imported = 0, artist_total = 0, artists_checked = 0, artists_matched = 0, artists_followed = 0, playlist_track_total = 0, playlist_tracks_imported = 0, saved_track_total = 0, saved_tracks_imported = 0, tracks_matched = 0, error = NULL, started_at = NOW(), completed_at = NULL, progress_updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status IN ('failed', 'partial') RETURNING include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
         .bind(import_id)
         .bind(claims.sub)
         .bind(requested_options.as_ref().map(|value| value.include_owned_playlists))
@@ -1073,8 +1256,8 @@ pub async fn restart_import(
             return error(StatusCode::INTERNAL_SERVER_ERROR, "could not restart music import");
         }
     };
-    launch_import(
-        pool.clone(),
+    if let Err(message) = queue_or_run_import(
+        &pool,
         claims.sub,
         import_id,
         import::ImportOptions {
@@ -1083,7 +1266,20 @@ pub async fn restart_import(
             include_followed_artists: import.include_followed_artists,
             include_saved_tracks: import.include_saved_tracks,
         },
-    );
+    )
+    .await
+    {
+        tracing::error!(%message, %import_id, "queue music import restart");
+        let _ = sqlx::query("UPDATE music_import_runs SET status = 'failed', stage = 'failed', activity = 'Could not queue the background import', error = $1, completed_at = NOW() WHERE id = $2 AND status = 'queued'")
+            .bind(&message)
+            .bind(import_id)
+            .execute(&pool)
+            .await;
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "could not queue music import",
+        );
+    }
     match import_response(&pool, import_id).await {
         Ok(row) => (StatusCode::ACCEPTED, Json(row)).into_response(),
         Err(err) => {
@@ -1093,6 +1289,62 @@ pub async fn restart_import(
                 "could not load queued music import",
             )
         }
+    }
+}
+
+pub async fn execute_import_task(
+    State(pool): State<DbPool>,
+    headers: HeaderMap,
+    Path(import_id): Path<Uuid>,
+) -> Response {
+    let expected_secret = match env("MUSIC_IMPORT_TASK_SECRET") {
+        Ok(value) => value,
+        Err(error_message) => {
+            tracing::error!(%error_message, "music import task secret is unavailable");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if headers
+        .get("x-hamrah-import-task-secret")
+        .and_then(|value| value.to_str().ok())
+        != Some(expected_secret.as_str())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let claimed = match sqlx::query_as::<_, (Uuid, bool, bool, bool, bool)>("UPDATE music_import_runs SET status = 'running', stage = 'preparing', activity = 'Background worker started', worker_started_at = NOW(), task_attempts = task_attempts + 1, progress_updated_at = NOW() WHERE id = $1 AND status = 'queued' RETURNING user_id,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks")
+        .bind(import_id)
+        .fetch_optional(&pool)
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => { tracing::error!(%err, %import_id, "claim music import task"); return StatusCode::INTERNAL_SERVER_ERROR.into_response(); }
+    };
+    let Some((
+        user_id,
+        include_owned_playlists,
+        include_saved_playlists,
+        include_followed_artists,
+        include_saved_tracks,
+    )) = claimed
+    else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    let response = run_import(
+        &pool,
+        user_id,
+        import_id,
+        import::ImportOptions {
+            include_owned_playlists,
+            include_saved_playlists,
+            include_followed_artists,
+            include_saved_tracks,
+        },
+    )
+    .await;
+    if response.status().is_server_error() {
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    } else {
+        StatusCode::NO_CONTENT.into_response()
     }
 }
 

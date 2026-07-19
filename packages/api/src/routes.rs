@@ -289,6 +289,14 @@ async fn delete_music_import_wrapper(
     music::delete_import(axum::extract::State(pool), headers, path).await
 }
 
+async fn execute_music_import_task_wrapper(
+    axum::extract::State((pool, _)): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+    path: axum::extract::Path<uuid::Uuid>,
+) -> Response {
+    music::execute_import_task(axum::extract::State(pool), headers, path).await
+}
+
 pub fn create_router(pool: DbPool) -> Router {
     // Initialize WebAuthn config
     let rp_id = std::env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".to_string());
@@ -418,6 +426,10 @@ pub fn create_router(pool: DbPool) -> Router {
         .route(
             "/v1/music/imports/{id}",
             delete(delete_music_import_wrapper),
+        )
+        .route(
+            "/internal/music-imports/{id}/execute",
+            post(execute_music_import_task_wrapper),
         )
         .route("/v1/tags", get(list_tags_wrapper))
         .route(
