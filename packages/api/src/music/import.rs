@@ -683,7 +683,7 @@ impl MusicImportProvider for HttpMusicImportProvider {
             tracks.extend(
                 page.items
                     .into_iter()
-                    .filter_map(|item| item.track)
+                    .filter_map(spotify_playlist_item)
                     .filter_map(spotify_track),
             );
             match page.next {
@@ -1637,8 +1637,10 @@ struct SpotifyPlaylistTrackPage {
 
 #[derive(Deserialize)]
 struct SpotifyPlaylistTrackItem {
-    #[serde(alias = "item")]
-    track: Option<SpotifyTrackWire>,
+    #[serde(default)]
+    item: Option<serde_json::Value>,
+    #[serde(default)]
+    track: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -1712,6 +1714,12 @@ fn spotify_track(track: SpotifyTrackWire) -> Option<SpotifyTrack> {
             album_name: track.album.map(|album| album.name),
         },
     )
+}
+
+fn spotify_playlist_item(item: SpotifyPlaylistTrackItem) -> Option<SpotifyTrackWire> {
+    item.item
+        .or(item.track)
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn normalize_isrc(isrc: &str) -> String {
@@ -2545,6 +2553,20 @@ mod tests {
     fn artist_name_matching_ignores_case_and_whitespace_only() {
         assert!(same_artist_name("The  Artist", " the artist "));
         assert!(!same_artist_name("Artist One", "Artist Two"));
+    }
+
+    #[test]
+    fn skips_a_playlist_item_that_does_not_match_spotify_track_shape() {
+        let item = SpotifyPlaylistTrackItem {
+            item: Some(serde_json::json!({
+                "type": "episode",
+                "name": "Podcast episode",
+                "artists": null,
+            })),
+            track: None,
+        };
+
+        assert!(spotify_playlist_item(item).is_none());
     }
 
     #[test]
