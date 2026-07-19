@@ -289,6 +289,7 @@ impl HttpMusicImportProvider {
     }
 
     async fn tidal_get<T: for<'de> Deserialize<'de>>(&self, url: String) -> Result<T, String> {
+        let url = self.tidal_url(&url)?;
         self.tidal_request(|| {
             self.client
                 .get(&url)
@@ -299,6 +300,17 @@ impl HttpMusicImportProvider {
         .json()
         .await
         .map_err(|error| error.to_string())
+    }
+
+    fn tidal_url(&self, url: &str) -> Result<String, String> {
+        if reqwest::Url::parse(url).is_ok() {
+            return Ok(url.to_string());
+        }
+        let base = reqwest::Url::parse(&format!("{}/", self.tidal_api_base.trim_end_matches('/')))
+            .map_err(|error| format!("invalid TIDAL API base URL: {error}"))?;
+        base.join(url.trim_start_matches('/'))
+            .map(|url| url.to_string())
+            .map_err(|error| format!("invalid TIDAL pagination URL: {error}"))
     }
 
     async fn tidal_owned_playlists(&self) -> Result<Vec<TidalPlaylist>, String> {
@@ -2584,6 +2596,51 @@ mod tests {
         assert_ne!(
             idempotency_key(import_id, "playlist:spotify-playlist"),
             idempotency_key(Uuid::new_v4(), "playlist:spotify-playlist")
+        );
+    }
+
+    #[tokio::test]
+    async fn follows_relative_tidal_playlist_pagination_links() {
+        let app = Router::new().route(
+            "/playlists",
+            get(|uri: Uri| async move {
+                if uri.query() == Some("cursor=next") {
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                        r#"{"data":[{"id":"second","attributes":{"name":"Second"}}],"links":{}}"#,
+                    )
+                        .into_response()
+                } else {
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, TIDAL_MEDIA_TYPE)],
+                        r#"{"data":[{"id":"first","attributes":{"name":"First"}}],"links":{"next":"/playlists?cursor=next"}}"#,
+                    )
+                        .into_response()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = HttpMusicImportProvider::with_tidal_api_base(format!("http://{address}"));
+
+        let playlists = provider.tidal_owned_playlists().await.unwrap();
+
+        server.abort();
+        assert_eq!(
+            playlists,
+            vec![
+                TidalPlaylist {
+                    id: "first".to_string(),
+                    name: "First".to_string(),
+                },
+                TidalPlaylist {
+                    id: "second".to_string(),
+                    name: "Second".to_string(),
+                },
+            ]
         );
     }
 
