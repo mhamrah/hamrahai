@@ -699,16 +699,20 @@ impl MusicImportProvider for HttpMusicImportProvider {
     }
 }
 
-pub(super) async fn execute_import_with_progress<P, F, Fut>(
+pub(super) async fn execute_import_with_progress<P, F, Fut, G, PlaylistFut>(
     provider: &P,
     import_id: Uuid,
     options: ImportOptions,
+    existing_tidal_playlists: &HashMap<String, String>,
     mut report_progress: F,
+    mut report_playlist_created: G,
 ) -> Result<(ImportOutcome, ImportProgress), ImportFailure>
 where
     P: MusicImportProvider,
     F: FnMut(ImportProgress) -> Fut,
     Fut: Future<Output = ()>,
+    G: FnMut(&SpotifyPlaylist, &str) -> PlaylistFut,
+    PlaylistFut: Future<Output = ()>,
 {
     let mut outcome = ImportOutcome::default();
     let mut progress = ImportProgress {
@@ -819,21 +823,27 @@ where
         } else {
             TidalPlaylistVisibility::Unlisted
         };
-        let tidal_playlist_id = provider
-            .create_tidal_playlist(
-                &playlist,
-                visibility,
-                idempotency_key(import_id, &format!("playlist:{}", playlist.id)),
-            )
-            .await
-            .map_err(|message| ImportFailure {
-                message,
-                outcome: outcome.clone(),
-                progress: progress.clone(),
-            })?;
-        outcome.imported_items += 1;
-        progress.playlists_imported += 1;
-        report_progress(progress.clone()).await;
+        let tidal_playlist_id = if let Some(existing) = existing_tidal_playlists.get(&playlist.id) {
+            existing.clone()
+        } else {
+            let created = provider
+                .create_tidal_playlist(
+                    &playlist,
+                    visibility,
+                    idempotency_key(import_id, &format!("playlist:{}", playlist.id)),
+                )
+                .await
+                .map_err(|message| ImportFailure {
+                    message,
+                    outcome: outcome.clone(),
+                    progress: progress.clone(),
+                })?;
+            report_playlist_created(&playlist, &created).await;
+            outcome.imported_items += 1;
+            progress.playlists_imported += 1;
+            report_progress(progress.clone()).await;
+            created
+        };
 
         progress.stage = "adding_playlist_tracks";
         report_progress(progress.clone()).await;
@@ -1391,7 +1401,9 @@ mod tests {
                 include_followed_artists: true,
                 include_saved_tracks: false,
             },
+            &HashMap::new(),
             |_| async {},
+            |_, _| async {},
         )
         .await
         .unwrap()
@@ -1444,7 +1456,9 @@ mod tests {
                 include_followed_artists: false,
                 include_saved_tracks: false,
             },
+            &HashMap::new(),
             |_| async {},
+            |_, _| async {},
         )
         .await
         .unwrap()
@@ -1455,6 +1469,49 @@ mod tests {
         assert_eq!(
             *provider.created_playlists.lock().unwrap(),
             vec![("saved".to_string(), TidalPlaylistVisibility::Unlisted)]
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_reuses_persisted_tidal_playlist_without_creating_a_duplicate() {
+        let provider = FakeProvider {
+            playlists: vec![playlist("owned", "spotify-user", true)],
+            playlist_tracks: HashMap::from([("owned".to_string(), vec![track(Some("US-AAA-01"))])]),
+            playlist_track_errors: HashMap::new(),
+            saved_tracks: Vec::new(),
+            tidal_tracks: HashMap::from([("US-AAA-01".to_string(), "tidal-track".to_string())]),
+            artists: Vec::new(),
+            matched_artist: None,
+            created_playlists: Mutex::new(Vec::new()),
+            added_playlist_tracks: Mutex::new(Vec::new()),
+            saved_tidal_tracks: Mutex::new(Vec::new()),
+            followed_artists: Mutex::new(Vec::new()),
+        };
+
+        let (_, progress) = execute_import_with_progress(
+            &provider,
+            Uuid::nil(),
+            ImportOptions {
+                include_owned_playlists: true,
+                include_saved_playlists: false,
+                include_followed_artists: false,
+                include_saved_tracks: false,
+            },
+            &HashMap::from([("owned".to_string(), "existing-tidal-playlist".to_string())]),
+            |_| async {},
+            |_, _| async {},
+        )
+        .await
+        .unwrap();
+
+        assert!(provider.created_playlists.lock().unwrap().is_empty());
+        assert_eq!(progress.playlists_imported, 0);
+        assert_eq!(
+            *provider.added_playlist_tracks.lock().unwrap(),
+            vec![(
+                "existing-tidal-playlist".to_string(),
+                vec!["tidal-track".to_string()]
+            )]
         );
     }
 
@@ -1493,7 +1550,9 @@ mod tests {
                 include_followed_artists: false,
                 include_saved_tracks: true,
             },
+            &HashMap::new(),
             |_| async {},
+            |_, _| async {},
         )
         .await
         .unwrap();
@@ -1555,7 +1614,9 @@ mod tests {
                 include_followed_artists: false,
                 include_saved_tracks: false,
             },
+            &HashMap::new(),
             |_| async {},
+            |_, _| async {},
         )
         .await
         .unwrap();
@@ -1603,6 +1664,7 @@ mod tests {
                 include_followed_artists: true,
                 include_saved_tracks: false,
             },
+            &HashMap::new(),
             {
                 let updates = Arc::clone(&updates);
                 move |progress| {
@@ -1610,6 +1672,7 @@ mod tests {
                     async move { updates.lock().unwrap().push(progress) }
                 }
             },
+            |_, _| async {},
         )
         .await
         .unwrap();

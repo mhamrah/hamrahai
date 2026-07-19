@@ -735,6 +735,16 @@ async fn run_import(
 ) -> Response {
     let initial_progress = import::ImportProgress::default();
     persist_import_progress(pool, import_id, &initial_progress).await;
+    let existing_tidal_playlists = match load_import_playlists(pool, import_id).await {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::error!(%err, %import_id, "load created TIDAL playlists for restart");
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not resume music import safely",
+            );
+        }
+    };
     let result = async {
         let spotify_required_scopes: &[&str] = if options.include_saved_tracks {
             &["user-library-read"]
@@ -758,10 +768,26 @@ async fn run_import(
             })?;
         let provider =
             import::HttpMusicImportProvider::new(spotify_access_token, tidal_access_token);
-        import::execute_import_with_progress(&provider, import_id, options, |progress| {
-            let pool = pool.clone();
-            async move { persist_import_progress(&pool, import_id, &progress).await }
-        })
+        import::execute_import_with_progress(
+            &provider,
+            import_id,
+            options,
+            &existing_tidal_playlists,
+            |progress| {
+                let pool = pool.clone();
+                async move { persist_import_progress(&pool, import_id, &progress).await }
+            },
+            |playlist, tidal_playlist_id| {
+                let pool = pool.clone();
+                let spotify_playlist_id = playlist.id.clone();
+                let tidal_playlist_id = tidal_playlist_id.to_string();
+                async move {
+                    if let Err(err) = persist_import_playlist(&pool, import_id, &spotify_playlist_id, &tidal_playlist_id).await {
+                        tracing::error!(%err, %import_id, %spotify_playlist_id, "persist created TIDAL playlist");
+                    }
+                }
+            },
+        )
         .await
     }
     .await;
@@ -820,6 +846,26 @@ async fn run_import(
         Ok(None) => error(StatusCode::CONFLICT, "music import is no longer active; refresh its status before restarting"),
         Err(err) => { tracing::error!(%err, %import_id, "complete music import"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not complete music import") }
     }
+}
+
+async fn load_import_playlists(
+    pool: &DbPool,
+    import_id: Uuid,
+) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT spotify_playlist_id, tidal_playlist_id FROM music_import_playlists WHERE import_id = $1")
+        .bind(import_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+async fn persist_import_playlist(
+    pool: &DbPool,
+    import_id: Uuid,
+    spotify_playlist_id: &str,
+    tidal_playlist_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO music_import_playlists (import_id,spotify_playlist_id,tidal_playlist_id) VALUES ($1,$2,$3) ON CONFLICT (import_id,spotify_playlist_id) DO NOTHING")
+        .bind(import_id).bind(spotify_playlist_id).bind(tidal_playlist_id).execute(pool).await?;
+    Ok(())
 }
 
 async fn persist_unmatched_tracks(
