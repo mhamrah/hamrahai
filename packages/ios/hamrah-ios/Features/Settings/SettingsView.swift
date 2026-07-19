@@ -80,16 +80,6 @@ struct SettingsView: View {
             await fetchModelCatalog()
             await loadFromServerIfEmpty()
             loadPasskeys(showAlertOnFailure: false)
-            await loadMusicConnections()
-            await loadMusicImports()
-        }
-        .task(id: latestMusicImport?.isActive == true) {
-            guard latestMusicImport?.isActive == true else { return }
-            while !Task.isCancelled && latestMusicImport?.isActive == true {
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { break }
-                await loadMusicImports(showErrorOnFailure: false)
-            }
         }
         .alert(
             "Error", isPresented: .constant(errorMessage != nil),
@@ -367,60 +357,15 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var musicSyncSection: some View {
-        Section("Music Import & Status") {
-            Text("Copy Spotify playlist tracks and Liked Songs to TIDAL when their ISRC identifiers match exactly, and follow exact artist-name matches. Public Spotify playlists remain public; all others are unlisted.")
+        Section("Music") {
+            NavigationLink {
+                MusicManagementView()
+            } label: {
+                Label("Music management", systemImage: "music.note.list")
+            }
+            Text("Manage Spotify and TIDAL connections, compare transfers, and review unsupported songs.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-
-            ForEach(["spotify", "tidal"], id: \.self) { provider in
-                HStack {
-                    Label(provider.capitalized, systemImage: provider == "spotify" ? "music.note" : "waveform")
-                    Spacer()
-                    if let connection = musicConnections.first(where: { $0.provider == provider && $0.status == "connected" }) {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("Connected").foregroundStyle(.green)
-                            if let accountName = connection.provider_account_name {
-                                Text(accountName).font(.caption).fontWeight(.medium)
-                            }
-                            if let accountId = connection.provider_account_id {
-                                Text("\(provider == "spotify" ? "Spotify" : "TIDAL") ID: \(accountId)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        Menu("Manage") {
-                            Button("Change Account") {
-                                Task { await connectMusic(provider: provider) }
-                            }
-                            Button("Disconnect", role: .destructive) {
-                                Task { await disconnectMusic(provider: provider) }
-                            }
-                        }
-                        .disabled(isLoadingMusic || !canAttemptServerSync)
-                    } else {
-                        Button("Connect") { Task { await connectMusic(provider: provider) } }
-                            .disabled(isLoadingMusic || !canAttemptServerSync)
-                    }
-                }
-            }
-
-            Toggle("Also import saved Spotify playlists", isOn: $includeSavedMusicPlaylists)
-                .disabled(latestMusicImport?.importOptionsAreEditable == false)
-            Toggle("Also import Spotify Liked Songs", isOn: $includeSavedMusicTracks)
-                .disabled(latestMusicImport?.importOptionsAreEditable == false)
-            if includeSavedMusicTracks {
-                Text("Spotify will ask for permission to read your Liked Songs. Reconnect Spotify if requested.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Button(musicImportActionTitle) {
-                Task { await beginOrRestartMusicImport() }
-            }
-            .disabled(isLoadingMusic || latestMusicImport?.isActive == true || !hasMusicConnections || !canAttemptServerSync)
-
-            if let latestMusicImport {
-                musicImportStatus(latestMusicImport)
-            }
         }
     }
 

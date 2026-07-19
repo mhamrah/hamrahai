@@ -1,54 +1,12 @@
 import { component$ } from "@builder.io/qwik";
-import { routeLoader$, type DocumentHead } from "@builder.io/qwik-city";
-import type { MusicConnectionWire, MusicImportWire } from "@hamrah/shared";
+import { type DocumentHead } from "@builder.io/qwik-city";
 import { useUserLoader } from "../layout";
 import { PasskeyManagement } from "~/components/auth/passkey-management";
-import { MusicSyncPanel } from "~/components/music/music-sync-panel";
-import { createApiClient } from "~/lib/auth/api-client";
 import { linkedAuthProviders } from "~/lib/auth/linked-providers";
 
-function musicSyncError(error: unknown): string {
-  return error instanceof Error ? error.message : "Unable to load music sync.";
-}
-
-function musicConnectionCallbackError(url: URL): string | undefined {
-  const reason = url.searchParams.get("music_connection_error");
-  if (!reason) return undefined;
-  const provider =
-    url.searchParams.get("music_provider") === "tidal" ? "TIDAL" : "Spotify";
-  switch (reason) {
-    case "declined":
-      return `${provider} connection was canceled. No account was changed.`;
-    case "authorization_failed":
-      return `${provider} did not complete authorization. Try connecting again.`;
-    case "account_verification_failed":
-      return `Hamrah could not verify which ${provider} account was authorized, so the previous connection was left unchanged. Try connecting again.`;
-    default:
-      return `Unable to connect ${provider}. Try again.`;
-  }
-}
-
-export const useMusicSyncLoader = routeLoader$(async (event) => {
-  const client = createApiClient(event);
-  const callbackError = musicConnectionCallbackError(event.url);
-  try {
-    const [connections, imports] = await Promise.all([
-      client.get<MusicConnectionWire[]>("/v1/music/connections"),
-      client.get<MusicImportWire[]>("/v1/music/imports"),
-    ]);
-    return { connections, imports, error: callbackError };
-  } catch (error) {
-    return {
-      connections: [],
-      imports: [],
-      error: musicSyncError(error),
-    };
-  }
-});
 
 export default component$(() => {
   const user = useUserLoader();
-  const musicSync = useMusicSyncLoader();
   const providers = linkedAuthProviders(user.value);
 
   return (
@@ -222,11 +180,11 @@ export default component$(() => {
                 userEmail={user.value.email}
               />
             </div>
-            <MusicSyncPanel
-              initialConnections={musicSync.value.connections}
-              initialImports={musicSync.value.imports}
-              initialError={musicSync.value.error}
-            />
+            <div class="mt-6 border-t border-gray-200 pt-6">
+              <h3 class="text-sm font-semibold text-gray-950">Music</h3>
+              <p class="mt-1 text-sm text-gray-600">Manage Spotify and TIDAL connections, transfers, and unmatched songs.</p>
+              <a href="/music" class="mt-3 inline-block rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50">Open music management</a>
+            </div>
           </section>
         </div>
       </main>

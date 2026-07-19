@@ -245,6 +245,17 @@ export interface MusicImportWire {
   created_at: string;
 }
 
+export interface MusicUnmatchedTrackWire {
+  id: string;
+  source_collection: string;
+  track_name: string;
+  artist_name?: string | null;
+  album_name?: string | null;
+  isrc?: string | null;
+  reason: "missing_isrc" | "not_available_in_tidal";
+  created_at: string;
+}
+
 /* --------------------------------- Utilities -------------------------------- */
 
 /**

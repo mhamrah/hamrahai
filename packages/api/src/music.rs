@@ -21,7 +21,8 @@ mod import;
 const SPOTIFY_SCOPES: &str = "user-read-private playlist-read-private playlist-read-collaborative user-follow-read user-library-read";
 // `w_usr` is marked INTERNAL in TIDAL's published authorization scheme and
 // makes its third-party authorization endpoint fail with error 1002.
-const TIDAL_SCOPES: &str = "playlists.write collection.write search.read user.read";
+const TIDAL_SCOPES: &str =
+    "playlists.read playlists.write collection.read collection.write search.read user.read";
 
 #[derive(Deserialize)]
 pub struct BeginConnectionRequest {
@@ -140,6 +141,18 @@ pub struct MusicImportResponse {
     pub saved_tracks_imported: i32,
     pub tracks_matched: i32,
     pub error: Option<String>,
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct MusicUnmatchedTrackResponse {
+    pub id: Uuid,
+    pub source_collection: String,
+    pub track_name: String,
+    pub artist_name: Option<String>,
+    pub album_name: Option<String>,
+    pub isrc: Option<String>,
+    pub reason: String,
     pub created_at: chrono::DateTime<Utc>,
 }
 
@@ -723,6 +736,16 @@ async fn run_import(
 ) -> Response {
     let initial_progress = import::ImportProgress::default();
     persist_import_progress(pool, import_id, &initial_progress).await;
+    let existing_tidal_playlists = match load_import_playlists(pool, import_id).await {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::error!(%err, %import_id, "load created TIDAL playlists for restart");
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not resume music import safely",
+            );
+        }
+    };
     let result = async {
         let spotify_required_scopes: &[&str] = if options.include_saved_tracks {
             &["user-library-read"]
@@ -737,7 +760,12 @@ async fn run_import(
                     outcome: import::ImportOutcome::default(),
                     progress: initial_progress.clone(),
                 })?;
-        let tidal_access_token = access_token_for_import(pool, user_id, "tidal", &[])
+        let tidal_access_token = access_token_for_import(
+            pool,
+            user_id,
+            "tidal",
+            &["playlists.read", "collection.read"],
+        )
             .await
             .map_err(|message| import::ImportFailure {
                 message,
@@ -746,10 +774,26 @@ async fn run_import(
             })?;
         let provider =
             import::HttpMusicImportProvider::new(spotify_access_token, tidal_access_token);
-        import::execute_import_with_progress(&provider, import_id, options, |progress| {
-            let pool = pool.clone();
-            async move { persist_import_progress(&pool, import_id, &progress).await }
-        })
+        import::execute_import_with_progress(
+            &provider,
+            import_id,
+            options,
+            &existing_tidal_playlists,
+            |progress| {
+                let pool = pool.clone();
+                async move { persist_import_progress(&pool, import_id, &progress).await }
+            },
+            |playlist, tidal_playlist_id| {
+                let pool = pool.clone();
+                let spotify_playlist_id = playlist.id.clone();
+                let tidal_playlist_id = tidal_playlist_id.to_string();
+                async move {
+                    if let Err(err) = persist_import_playlist(&pool, import_id, &spotify_playlist_id, &tidal_playlist_id).await {
+                        tracing::error!(%err, %import_id, %spotify_playlist_id, "persist created TIDAL playlist");
+                    }
+                }
+            },
+        )
         .await
     }
     .await;
@@ -799,12 +843,61 @@ async fn run_import(
     if status != "failed" {
         progress.stage = "completed";
     }
+    if let Err(err) = persist_unmatched_tracks(pool, import_id, &outcome.unmatched_tracks).await {
+        tracing::error!(%err, %import_id, "persist unmatched music tracks");
+    }
     match sqlx::query_as::<_, MusicImportResponse>("UPDATE music_import_runs SET status = $1, stage = $2, total_items = $3, imported_items = $4, unmatched_items = $5, playlist_total = $6, playlists_imported = $7, artist_total = $8, artists_checked = $9, artists_matched = $10, artists_followed = $11, playlist_track_total = $12, playlist_tracks_imported = $13, saved_track_total = $14, saved_tracks_imported = $15, tracks_matched = $16, error = $17, completed_at = NOW(), progress_updated_at = NOW() WHERE id = $18 AND status = 'running' RETURNING id,status,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,stage,total_items,imported_items,unmatched_items,playlist_total,playlists_imported,artist_total,artists_checked,artists_matched,artists_followed,playlist_track_total,playlist_tracks_imported,saved_track_total,saved_tracks_imported,tracks_matched,error,created_at")
         .bind(status).bind(progress.stage).bind(outcome.total_items).bind(outcome.imported_items).bind(outcome.unmatched_items).bind(progress.playlist_total).bind(progress.playlists_imported).bind(progress.artist_total).bind(progress.artists_checked).bind(progress.artists_matched).bind(progress.artists_followed).bind(progress.playlist_track_total).bind(progress.playlist_tracks_imported).bind(progress.saved_track_total).bind(progress.saved_tracks_imported).bind(progress.tracks_matched).bind(import_error).bind(import_id).fetch_optional(pool).await {
         Ok(Some(row)) => (StatusCode::CREATED, Json(row)).into_response(),
         Ok(None) => error(StatusCode::CONFLICT, "music import is no longer active; refresh its status before restarting"),
         Err(err) => { tracing::error!(%err, %import_id, "complete music import"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not complete music import") }
     }
+}
+
+async fn load_import_playlists(
+    pool: &DbPool,
+    import_id: Uuid,
+) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT spotify_playlist_id, tidal_playlist_id FROM music_import_playlists WHERE import_id = $1")
+        .bind(import_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+async fn persist_import_playlist(
+    pool: &DbPool,
+    import_id: Uuid,
+    spotify_playlist_id: &str,
+    tidal_playlist_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO music_import_playlists (import_id,spotify_playlist_id,tidal_playlist_id) VALUES ($1,$2,$3) ON CONFLICT (import_id,spotify_playlist_id) DO NOTHING")
+        .bind(import_id).bind(spotify_playlist_id).bind(tidal_playlist_id).execute(pool).await?;
+    Ok(())
+}
+
+async fn persist_unmatched_tracks(
+    pool: &DbPool,
+    import_id: Uuid,
+    tracks: &[import::UnmatchedTrack],
+) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("DELETE FROM music_import_unmatched_tracks WHERE import_id = $1")
+        .bind(import_id)
+        .execute(&mut *transaction)
+        .await?;
+    for unmatched in tracks {
+        sqlx::query("INSERT INTO music_import_unmatched_tracks (id,import_id,source_collection,track_name,artist_name,album_name,isrc,reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
+            .bind(Uuid::new_v4())
+            .bind(import_id)
+            .bind(&unmatched.source_collection)
+            .bind(&unmatched.track.name)
+            .bind(&unmatched.track.artist_name)
+            .bind(&unmatched.track.album_name)
+            .bind(&unmatched.track.isrc)
+            .bind(unmatched.reason)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await
 }
 
 pub async fn create_import(
@@ -959,6 +1052,22 @@ pub async fn list_imports(State(pool): State<DbPool>, headers: HeaderMap) -> Res
     }
     match sqlx::query_as::<_, MusicImportResponse>("SELECT id,status,include_owned_playlists,include_saved_playlists,include_followed_artists,include_saved_tracks,stage,total_items,imported_items,unmatched_items,playlist_total,playlists_imported,artist_total,artists_checked,artists_matched,artists_followed,playlist_track_total,playlist_tracks_imported,saved_track_total,saved_tracks_imported,tracks_matched,error,created_at FROM music_import_runs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20").bind(claims.sub).fetch_all(&pool).await {
         Ok(rows) => Json(rows).into_response(), Err(err) => { tracing::error!(%err, "list music imports"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not load music imports") }
+    }
+}
+
+pub async fn list_unmatched_tracks(
+    State(pool): State<DbPool>,
+    headers: HeaderMap,
+    Path(import_id): Path<Uuid>,
+) -> Response {
+    let claims = match require_session_or_claims(&pool, &headers).await {
+        Ok(value) => value,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    match sqlx::query_as::<_, MusicUnmatchedTrackResponse>("SELECT t.id,t.source_collection,t.track_name,t.artist_name,t.album_name,t.isrc,t.reason,t.created_at FROM music_import_unmatched_tracks t JOIN music_import_runs r ON r.id = t.import_id WHERE t.import_id = $1 AND r.user_id = $2 ORDER BY t.created_at, t.id LIMIT 500")
+        .bind(import_id).bind(claims.sub).fetch_all(&pool).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(err) => { tracing::error!(%err, %import_id, "list unmatched music tracks"); error(StatusCode::INTERNAL_SERVER_ERROR, "could not load unmatched music tracks") }
     }
 }
 
