@@ -21,7 +21,8 @@ mod import;
 const SPOTIFY_SCOPES: &str = "user-read-private playlist-read-private playlist-read-collaborative user-follow-read user-library-read";
 // `w_usr` is marked INTERNAL in TIDAL's published authorization scheme and
 // makes its third-party authorization endpoint fail with error 1002.
-const TIDAL_SCOPES: &str = "playlists.write collection.write search.read user.read";
+const TIDAL_SCOPES: &str =
+    "playlists.read playlists.write collection.read collection.write search.read user.read";
 
 #[derive(Deserialize)]
 pub struct BeginConnectionRequest {
@@ -759,7 +760,12 @@ async fn run_import(
                     outcome: import::ImportOutcome::default(),
                     progress: initial_progress.clone(),
                 })?;
-        let tidal_access_token = access_token_for_import(pool, user_id, "tidal", &[])
+        let tidal_access_token = access_token_for_import(
+            pool,
+            user_id,
+            "tidal",
+            &["playlists.read", "collection.read"],
+        )
             .await
             .map_err(|message| import::ImportFailure {
                 message,
