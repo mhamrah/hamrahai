@@ -8,8 +8,16 @@ The API is deployed to Google Cloud Run through Cloud Deploy.
 - **Region**: `us-central1`
 - **Service**: `hamrah-api`
 - **URL**: https://hamrah-api-a7tefmgk7q-uc.a.run.app
-- **Billing mode**: Instance-based billing (`cpu-throttling: false`)
+- **Billing mode**: Request-based billing (`cpu-throttling: true`)
 - **Request timeout**: 30 minutes, with a 28-minute application worker budget
+
+### Cost-control default
+
+Keep `run.googleapis.com/cpu-throttling: "true"` and
+`autoscaling.knative.dev/minScale: "0"` in the Cloud Run manifest. This lets
+the API scale to zero while idle and prevents continuous CPU and memory charges.
+Any exception requires an explicit, documented reason because it creates an
+always-on cost.
 
 ## Declarative delivery configuration
 
