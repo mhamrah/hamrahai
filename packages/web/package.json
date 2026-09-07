@@ -76,8 +76,8 @@
     "@hamrah/shared": "workspace:*",
     "@oslojs/crypto": "1.0.1",
     "@oslojs/encoding": "1.1.0",
-    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/browser": "^14.0.0",
     "arctic": "3.7.0",
-    "jose": "6.2.3"
+    "jose": "6.2.11"
   }
 }
