@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -53,7 +53,7 @@ jobs:
 
       - name: Install pnpm
         if: steps.changes.outputs.should_run == 'true'
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.1.0
         with:
           version: 11.6.0
 
@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: steps.changes.outputs.should_run == 'true'
-        uses: codecov/codecov-action@v7.0.0
+        uses: codecov/codecov-action@v7.1.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/web/coverage/lcov.info
@@ -105,7 +105,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -135,7 +135,7 @@ jobs:
 
       - name: Install pnpm
         if: steps.changes.outputs.should_run == 'true'
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.1.0
         with:
           version: 11.6.0
 
@@ -192,7 +192,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -222,7 +222,7 @@ jobs:
 
       - name: Install pnpm
         if: steps.changes.outputs.should_run == 'true'
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.1.0
         with:
           version: 11.6.0
 
@@ -266,7 +266,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -296,7 +296,7 @@ jobs:
 
       - name: Install pnpm
         if: steps.changes.outputs.should_run == 'true'
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.1.0
         with:
           version: 11.6.0
 
@@ -329,10 +329,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@v6.1.0
         with:
           version: 11.6.0
 
