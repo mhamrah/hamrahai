@@ -1621,43 +1621,79 @@ mod tests {
         );
         assert!(normalized_import_task_secret(" \n ").is_err());
     }
+    fn test_encryption_key() -> [u8; 32] {
+        let mut key = [0u8; 32];
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut key).unwrap();
+        key
+    }
     #[test]
     fn encrypted_token_does_not_contain_plaintext() {
         assert!(
-            !encrypt_token_with_key("provider-secret", &[7u8; 32])
+            !encrypt_token_with_key("provider-secret", &test_encryption_key())
                 .unwrap()
                 .contains("provider-secret")
         );
     }
     #[test]
     fn malformed_stored_token_nonce_returns_an_error() {
+        let key = test_encryption_key();
         for nonce in ["", "AA", "AAAAAAAAAAAAAAAAAA"] {
             assert_eq!(
-                decrypt_token_with_key(&format!("{nonce}.AA"), &[7u8; 32]),
+                decrypt_token_with_key(&format!("{nonce}.AA"), &key),
                 Err("stored provider token is invalid".to_string())
             );
         }
     }
     #[test]
     fn encrypted_token_rejects_a_different_key() {
-        let encrypted = encrypt_token_with_key("provider-secret", &[7u8; 32]).unwrap();
-        assert!(decrypt_token_with_key(&encrypted, &[8u8; 32]).is_err());
+        let key = test_encryption_key();
+        let encrypted = encrypt_token_with_key("provider-secret", &key).unwrap();
+        let mut different_key = key;
+        different_key[0] ^= 1;
+        assert!(decrypt_token_with_key(&encrypted, &different_key).is_err());
     }
     #[test]
     fn encrypted_token_reads_existing_aes_gcm_format() {
-        // AES-256-GCM ciphertext plus tag, with the existing base64url nonce.payload format.
-        // Key: 32 bytes of 7; nonce: bytes 0 through 11; no associated data.
-        let stored = "AAECAwQFBgcICQoL.aPOGBnRtvDtawYD_kD0Y6j7pBWyWJag6CUe_lqtKew";
+        use aes_gcm_legacy::{
+            Aes256Gcm as LegacyCipher, Nonce as LegacyNonce,
+            aead::{Aead as _, KeyInit as _},
+        };
+
+        let key = test_encryption_key();
+        let mut nonce = [0u8; 12];
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce).unwrap();
+        let legacy = LegacyCipher::new_from_slice(&key).unwrap();
+        let ciphertext = legacy
+            .encrypt(&LegacyNonce::from(nonce), "provider-secret".as_bytes())
+            .unwrap();
+        let stored = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(nonce),
+            URL_SAFE_NO_PAD.encode(ciphertext)
+        );
         assert_eq!(
-            decrypt_token_with_key(stored, &[7u8; 32]).unwrap(),
+            decrypt_token_with_key(&stored, &key).unwrap(),
             "provider-secret"
         );
+
+        // New tokens must also remain readable by the previous release on rollback.
+        let encrypted = encrypt_token_with_key("provider-secret", &key).unwrap();
+        let (nonce, ciphertext) = encrypted.split_once('.').unwrap();
+        let nonce: [u8; 12] = URL_SAFE_NO_PAD.decode(nonce).unwrap().try_into().unwrap();
+        let plaintext = legacy
+            .decrypt(
+                &LegacyNonce::from(nonce),
+                URL_SAFE_NO_PAD.decode(ciphertext).unwrap().as_slice(),
+            )
+            .unwrap();
+        assert_eq!(plaintext, b"provider-secret");
     }
     #[test]
     fn encrypted_token_round_trips() {
-        let encrypted = encrypt_token_with_key("provider-secret", &[7u8; 32]).unwrap();
+        let key = test_encryption_key();
+        let encrypted = encrypt_token_with_key("provider-secret", &key).unwrap();
         assert_eq!(
-            decrypt_token_with_key(&encrypted, &[7u8; 32]).unwrap(),
+            decrypt_token_with_key(&encrypted, &key).unwrap(),
             "provider-secret"
         );
     }
