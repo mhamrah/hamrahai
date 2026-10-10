@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 /// <reference types="vitest" />
 import { defineConfig } from "vitest/config";
 import { qwikVite } from "@builder.io/qwik/optimizer";
@@ -25,7 +26,7 @@ export default defineConfig({
     qwikVite(),
   ],
   resolve: {
-    tsconfigPaths: true,
+    alias: { "~": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   test: {
     globals: true,
