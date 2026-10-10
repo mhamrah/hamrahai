@@ -239,7 +239,7 @@ impl Default for ImportProgress {
 pub(super) struct ImportFailure {
     pub message: String,
     pub outcome: ImportOutcome,
-    pub progress: ImportProgress,
+    pub progress: Box<ImportProgress>,
 }
 
 pub(super) trait MusicImportProvider {
@@ -1280,7 +1280,7 @@ where
         .map_err(|message| ImportFailure {
             message,
             outcome: outcome.clone(),
-            progress: progress.clone(),
+            progress: Box::new(progress.clone()),
         })?;
 
     let playlists = if options.include_owned_playlists || options.include_saved_playlists {
@@ -1290,7 +1290,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?
             .into_iter()
             .filter(|playlist| {
@@ -1322,7 +1322,7 @@ where
                 return Err(ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 });
             }
         }
@@ -1334,7 +1334,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?
     } else {
         Vec::new()
@@ -1346,7 +1346,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?
     } else {
         Vec::new()
@@ -1380,7 +1380,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?;
     let mut tidal_playlist_tracks = HashMap::new();
     if options.include_owned_playlists {
@@ -1396,7 +1396,7 @@ where
                 .map_err(|message| ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 })?;
             tidal_playlist_tracks.insert(tidal_playlist.id.clone(), tracks);
         }
@@ -1451,7 +1451,7 @@ where
                 .map_err(|message| ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 })?;
             report_playlist_created(&playlist, &created).await;
             outcome.imported_items += 1;
@@ -1525,7 +1525,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
                 outcome.imported_items += result.imported_items;
                 outcome.unmatched_items += result.unmatched_items;
@@ -1538,7 +1538,7 @@ where
                             result.unmatched_items, playlist.name
                         ),
                         outcome,
-                        progress,
+                        progress: Box::new(progress),
                     });
                 }
             }
@@ -1570,7 +1570,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
             outcome.unmatched_items += unmatched.len() as i32;
             progress.tracks_unmatched += unmatched.len() as i32;
@@ -1590,7 +1590,7 @@ where
                 .map_err(|message| ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 })?;
             outcome.imported_items += result.imported_items;
             outcome.unmatched_items += result.unmatched_items;
@@ -1623,7 +1623,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?;
             outcome.unmatched_items += unmatched.len() as i32;
             progress.tracks_unmatched += unmatched.len() as i32;
@@ -1636,7 +1636,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
                 outcome.imported_items += spotify_track_ids.len() as i32;
                 progress.playlist_tracks_imported += spotify_track_ids.len() as i32;
@@ -1658,7 +1658,7 @@ where
                 .map_err(|message| ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 })?;
         }
         let reconciled_tracks =
@@ -1727,7 +1727,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
                 if result.unmatched_items > 0 {
                     return Err(ImportFailure {
@@ -1736,7 +1736,7 @@ where
                             result.unmatched_items, tidal_playlist.name
                         ),
                         outcome,
-                        progress,
+                        progress: Box::new(progress),
                     });
                 }
             }
@@ -1746,7 +1746,7 @@ where
                 .map_err(|message| ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 })?;
             let spotify_playlist = SpotifyPlaylist {
                 id: spotify_playlist_id,
@@ -1764,7 +1764,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?;
             if !spotify_track_ids.is_empty() {
                 provider
@@ -1773,7 +1773,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
             }
             outcome.imported_items += 1 + spotify_track_ids.len() as i32;
@@ -1799,7 +1799,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
             }
         }
@@ -1824,7 +1824,7 @@ where
                 return Err(ImportFailure {
                     message,
                     outcome,
-                    progress,
+                    progress: Box::new(progress),
                 });
             }
         }
@@ -1851,7 +1851,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?;
         outcome.imported_items += result.imported_items;
         outcome.unmatched_items += result.unmatched_items;
@@ -1871,7 +1871,7 @@ where
                 .map_err(|message| ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 })?;
         let spotify_saved_isrcs = saved_tracks
             .iter()
@@ -1885,7 +1885,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
             outcome.unmatched_items += unmatched.len() as i32;
             progress.tracks_unmatched += unmatched.len() as i32;
@@ -1905,7 +1905,7 @@ where
                     .map_err(|message| ImportFailure {
                         message,
                         outcome: outcome.clone(),
-                        progress: progress.clone(),
+                        progress: Box::new(progress.clone()),
                     })?;
                 outcome.imported_items += result.imported_items;
                 outcome.unmatched_items += result.unmatched_items;
@@ -1936,7 +1936,7 @@ where
             .map_err(|message| ImportFailure {
                 message,
                 outcome: outcome.clone(),
-                progress: progress.clone(),
+                progress: Box::new(progress.clone()),
             })?;
         let mut spotify_track_ids = Vec::new();
         for track in tidal_only_tracks {
@@ -1972,7 +1972,7 @@ where
                 .map_err(|message| ImportFailure {
                     message,
                     outcome: outcome.clone(),
-                    progress: progress.clone(),
+                    progress: Box::new(progress.clone()),
                 })?;
             outcome.imported_items += track_ids.len() as i32;
             progress.saved_tracks_imported += track_ids.len() as i32;

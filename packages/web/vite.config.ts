@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 /**
  * This is the base config for vite.
  * When building, the adapter config is used which loads this file and extends it.
@@ -36,7 +37,7 @@ export default defineConfig(({ command, mode }): UserConfig => {
       ...(mode === "test-ssr" ? [] : [mkcert()]),
     ],
     resolve: {
-      tsconfigPaths: true,
+      alias: { "~": fileURLToPath(new URL("./src", import.meta.url)) },
     },
     // This tells Vite which dependencies to pre-build in dev mode.
     optimizeDeps: {

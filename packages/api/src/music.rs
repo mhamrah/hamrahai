@@ -1,6 +1,6 @@
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
-    aead::{Aead, OsRng, rand_core::RngCore},
+    aead::{Aead, Generate},
 };
 use axum::{
     Json,
@@ -276,7 +276,8 @@ fn hash_state(state: &str) -> String {
 }
 fn random_urlsafe(bytes: usize) -> String {
     let mut data = vec![0; bytes];
-    OsRng.fill_bytes(&mut data);
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut data)
+        .expect("system random source unavailable");
     URL_SAFE_NO_PAD.encode(data)
 }
 fn code_challenge(verifier: &str) -> String {
@@ -294,10 +295,10 @@ fn encrypt_token(token: &str) -> Result<String, String> {
     encrypt_token_with_key(token, &key)
 }
 fn encrypt_token_with_key(token: &str, key: &[u8]) -> Result<String, String> {
-    let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
+    let nonce =
+        Nonce::try_generate().map_err(|_| "could not generate provider token nonce".to_string())?;
     let ciphertext = cipher(key)?
-        .encrypt(Nonce::from_slice(&nonce), token.as_bytes())
+        .encrypt(&nonce, token.as_bytes())
         .map_err(|_| "could not encrypt provider token".to_string())?;
     Ok(format!(
         "{}.{}",
@@ -322,8 +323,10 @@ fn decrypt_token_with_key(token: &str, key: &[u8]) -> Result<String, String> {
     let ciphertext = URL_SAFE_NO_PAD
         .decode(ciphertext)
         .map_err(|_| "stored provider token is invalid".to_string())?;
+    let nonce = Nonce::try_from(nonce.as_slice())
+        .map_err(|_| "stored provider token is invalid".to_string())?;
     let plaintext = cipher(key)?
-        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .decrypt(&nonce, ciphertext.as_ref())
         .map_err(|_| "stored provider token could not be decrypted".to_string())?;
     String::from_utf8(plaintext).map_err(|_| "stored provider token is invalid".to_string())
 }
@@ -848,7 +851,7 @@ async fn run_import(
                 .map_err(|message| import::ImportFailure {
                     message,
                     outcome: import::ImportOutcome::default(),
-                    progress: initial_progress.clone(),
+                    progress: Box::new(initial_progress.clone()),
                 })?;
         let tidal_access_token = access_token_for_import(
             pool,
@@ -865,7 +868,7 @@ async fn run_import(
             .map_err(|message| import::ImportFailure {
                 message,
                 outcome: import::ImportOutcome::default(),
-                progress: initial_progress.clone(),
+                progress: Box::new(initial_progress.clone()),
             })?;
         let provider = import::HttpMusicImportProvider::new(
             spotify_access_token,
@@ -918,7 +921,7 @@ async fn run_import(
     if let Err(failure) = &result
         && let Some(delay) = import::deferred_rate_limit_delay(&failure.message)
     {
-        let mut progress = failure.progress.clone();
+        let mut progress = failure.progress.as_ref().clone();
         progress.activity = format!(
             "Provider rate limit reached; resuming automatically in {} minutes",
             delay.as_secs().div_ceil(60)
@@ -970,7 +973,7 @@ async fn run_import(
             (
                 "failed",
                 failure.outcome,
-                failure.progress,
+                *failure.progress,
                 Some(import_error),
             )
         }
@@ -1620,19 +1623,86 @@ mod tests {
         );
         assert!(normalized_import_task_secret(" \n ").is_err());
     }
+    fn test_encryption_key() -> [u8; 32] {
+        rand::random()
+    }
     #[test]
     fn encrypted_token_does_not_contain_plaintext() {
         assert!(
-            !encrypt_token_with_key("provider-secret", &[7u8; 32])
+            !encrypt_token_with_key("provider-secret", &test_encryption_key())
                 .unwrap()
                 .contains("provider-secret")
         );
     }
     #[test]
-    fn encrypted_token_round_trips() {
-        let encrypted = encrypt_token_with_key("provider-secret", &[7u8; 32]).unwrap();
+    fn malformed_stored_token_nonce_returns_an_error() {
+        let key = test_encryption_key();
+        for nonce in ["", "AA", "AAAAAAAAAAAAAAAAAA"] {
+            assert_eq!(
+                decrypt_token_with_key(&format!("{nonce}.AA"), &key),
+                Err("stored provider token is invalid".to_string())
+            );
+        }
+    }
+    #[test]
+    fn encrypted_token_rejects_a_different_key() {
+        let key = test_encryption_key();
+        let encrypted = encrypt_token_with_key("provider-secret", &key).unwrap();
+        let mut different_key = key;
+        different_key[0] ^= 1;
+        assert!(decrypt_token_with_key(&encrypted, &different_key).is_err());
+    }
+    #[test]
+    fn encrypted_token_reads_existing_aes_gcm_format() {
+        use aes_gcm_legacy::{
+            Aes256Gcm as LegacyCipher, Nonce as LegacyNonce,
+            aead::{Aead as _, KeyInit as _},
+        };
+
+        let key = test_encryption_key();
+        let nonce: [u8; 12] = rand::random();
+        let legacy = LegacyCipher::new_from_slice(&key).unwrap();
+        let ciphertext = legacy
+            .encrypt(&LegacyNonce::from(nonce), "provider-secret".as_bytes())
+            .unwrap();
+        let stored = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(nonce),
+            URL_SAFE_NO_PAD.encode(ciphertext)
+        );
         assert_eq!(
-            decrypt_token_with_key(&encrypted, &[7u8; 32]).unwrap(),
+            decrypt_token_with_key(&stored, &key).unwrap(),
+            "provider-secret"
+        );
+
+        // New tokens must also remain readable by the previous release on rollback.
+        let encrypted = encrypt_token_with_key("provider-secret", &key).unwrap();
+        let (nonce, ciphertext) = encrypted.split_once('.').unwrap();
+        let nonce: [u8; 12] = URL_SAFE_NO_PAD.decode(nonce).unwrap().try_into().unwrap();
+        let plaintext = legacy
+            .decrypt(
+                &LegacyNonce::from(nonce),
+                URL_SAFE_NO_PAD.decode(ciphertext).unwrap().as_slice(),
+            )
+            .unwrap();
+        assert_eq!(plaintext, b"provider-secret");
+    }
+    #[test]
+    fn encrypted_tokens_use_distinct_nonces() {
+        let key = test_encryption_key();
+        let first = encrypt_token_with_key("provider-secret", &key).unwrap();
+        let second = encrypt_token_with_key("provider-secret", &key).unwrap();
+        assert_ne!(
+            first.split_once('.').unwrap().0,
+            second.split_once('.').unwrap().0
+        );
+    }
+    #[test]
+    fn encrypted_token_round_trips() {
+        let key = test_encryption_key();
+        let encrypted = encrypt_token_with_key("provider-secret", &key).unwrap();
+        assert_eq!(
+            decrypt_token_with_key(&encrypted, &key).unwrap(),
             "provider-secret"
         );
     }
@@ -1696,11 +1766,11 @@ mod tests {
         let failure = import::ImportFailure {
             message: "HTTP status client error (400 Bad Request)".to_string(),
             outcome: import::ImportOutcome::default(),
-            progress: import::ImportProgress {
+            progress: Box::new(import::ImportProgress {
                 stage: "adding_playlist_tracks",
                 playlists_imported: 1,
                 ..Default::default()
-            },
+            }),
         };
 
         assert_eq!(
