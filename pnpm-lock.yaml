@@ -59,7 +59,7 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))
       '@playwright/test':
-        specifier: ^1.63.0
+        specifier: 1.64.0
         version: 1.64.0
       '@qwikest/icons':
         specifier: ^0.0.13
