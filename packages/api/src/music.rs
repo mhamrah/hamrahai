@@ -1,4 +1,7 @@
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+use aes_gcm::{
+    Aes256Gcm, KeyInit, Nonce,
+    aead::{Aead, Generate},
+};
 use axum::{
     Json,
     extract::{Path, State},
@@ -292,11 +295,10 @@ fn encrypt_token(token: &str) -> Result<String, String> {
     encrypt_token_with_key(token, &key)
 }
 fn encrypt_token_with_key(token: &str, key: &[u8]) -> Result<String, String> {
-    let mut nonce = [0u8; 12];
-    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
-        .map_err(|_| "could not generate provider token nonce".to_string())?;
+    let nonce =
+        Nonce::try_generate().map_err(|_| "could not generate provider token nonce".to_string())?;
     let ciphertext = cipher(key)?
-        .encrypt(&Nonce::from(nonce), token.as_bytes())
+        .encrypt(&nonce, token.as_bytes())
         .map_err(|_| "could not encrypt provider token".to_string())?;
     Ok(format!(
         "{}.{}",
@@ -1622,9 +1624,7 @@ mod tests {
         assert!(normalized_import_task_secret(" \n ").is_err());
     }
     fn test_encryption_key() -> [u8; 32] {
-        let mut key = [0u8; 32];
-        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut key).unwrap();
-        key
+        rand::random()
     }
     #[test]
     fn encrypted_token_does_not_contain_plaintext() {
@@ -1660,8 +1660,7 @@ mod tests {
         };
 
         let key = test_encryption_key();
-        let mut nonce = [0u8; 12];
-        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce).unwrap();
+        let nonce: [u8; 12] = rand::random();
         let legacy = LegacyCipher::new_from_slice(&key).unwrap();
         let ciphertext = legacy
             .encrypt(&LegacyNonce::from(nonce), "provider-secret".as_bytes())
@@ -1687,6 +1686,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(plaintext, b"provider-secret");
+    }
+    #[test]
+    fn encrypted_tokens_use_distinct_nonces() {
+        let key = test_encryption_key();
+        let first = encrypt_token_with_key("provider-secret", &key).unwrap();
+        let second = encrypt_token_with_key("provider-secret", &key).unwrap();
+        assert_ne!(
+            first.split_once('.').unwrap().0,
+            second.split_once('.').unwrap().0
+        );
     }
     #[test]
     fn encrypted_token_round_trips() {
